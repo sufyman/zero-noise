@@ -1,0 +1,34 @@
+I am doing a hackathon and we are building an app called zero noise. 
+Zero noise lets you define your interests and goals, then define how best you like to get that info into your head and how often. All of this is done via voice where an AI agent asks you questions to get this info out of you.
+After we build the user persona and know their interests and goals, and how they like to consume this info, the AI prepares the report in your chosen format. 
+Example of output/format could be a daily email, a report, podcast, website link, youtube video, tik tok style short format.  
+
+For the hackathon we'll show a dummy version for all but podcast - which we want to focus on.
+
+I am responsible for building a killer frontend with dummy interactions and data but replicating the real feel of the final app that we need to present in 24 hours. My team mates will then link the right services from OpenAI, ElevenLabs, and other API tools.
+
+I am using google sheets to store email data and all input/output to keep it simple for the hackathon. Tonight we share the website with friends to get traction.
+
+Please build a killer web app with pwa so i can also demonstrate on my phone. PWA you can do later if it will take time.
+
+Use an approriate tech stack.
+
+This is how I imagine this SPA.
+
+Main landing page with a main CTA of signup and get your first report for free.
+When they click signup, they enter their email (stored in google sheets, can login by entering email again) and then screen goes clear with a voice agent animation who starts asking you questions to get to know your goals and interests, after getting this, it asks about your ideal format and frequency. After this the ganet thanks and says your first report will be ready in less than a minute.
+Then we see your feed is being prepared and a progress bar. After 30 secs the first format is ready. user can click on format (first format for hackathon is the podcast, so we show click on the podcast and then place holders with other formats). When you open the podcast, you see your chosen hosts and an audio player on top and a report below which you could also read and double click on certain topics.
+You can also disrupt the podcast and ask questions in between and then the hosts go deeper and talk about that.
+
+Use dummy script for onboarding, with the user interested in the following:
+-Consumer startup news
+-SEO trends
+-AI progress for startups
+-Stable diffusion models
+
+The user wants to hear a 5 min podcast daily on news/updates on these topics, he likes Tim ferris and Lex Friedman as hosts and 1.5x speed so they should speak faster than normal, the user also likes them giving him positive mantra of 'you can do it Sam!' in the opening.
+
+Then create a report and podcast page which the user can open to get the daily briefing.
+
+Initiate the project and start building
+
