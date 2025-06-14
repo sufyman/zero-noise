@@ -7,7 +7,16 @@ const elevenlabs = new ElevenLabsClient({
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, voiceId = 'pNInz6obpgDQGcFmaJgB' } = await request.json();
+    // Handle malformed JSON requests
+    let requestData;
+    try {
+      requestData = await request.json();
+    } catch (jsonError) {
+      console.error('Invalid JSON in TTS request:', jsonError);
+      return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 });
+    }
+
+    const { text, voiceId = 'pNInz6obpgDQGcFmaJgB' } = requestData;
 
     if (!text) {
       return NextResponse.json({ error: 'Text is required' }, { status: 400 });
