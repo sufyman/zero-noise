@@ -197,7 +197,7 @@ export default function OnboardingPage() {
                     What are your main interests?
                   </h2>
                   <p className="text-gray-600 mb-6">
-                    Select the topics you'd like to stay updated on:
+                    Select the topics you&apos;d like to stay updated on:
                   </p>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-8">
                     {interestOptions.map((interest) => (
@@ -336,7 +336,7 @@ export default function OnboardingPage() {
                   <div className="mb-6">
                     <input
                       type="text"
-                                             placeholder="e.g., &apos;You can do it!&apos; or &apos;Focus on what matters today&apos;"
+                      placeholder="e.g., &apos;You can do it!&apos; or &apos;Focus on what matters today&apos;"
                       value={formData.mantra}
                       onChange={(e) => setFormData(prev => ({ ...prev, mantra: e.target.value }))}
                       className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
@@ -354,7 +354,7 @@ export default function OnboardingPage() {
                       {formData.contentFormat === 'podcast' && (
                         <div><strong>Speed:</strong> {formData.preferredSpeed}x</div>
                       )}
-                      {formData.mantra && <div><strong>Mantra:</strong> "{formData.mantra}"</div>}
+                      {formData.mantra && <div><strong>Mantra:</strong> &quot;{formData.mantra}&quot;</div>}
                     </div>
                   </div>
                 </div>
@@ -376,7 +376,7 @@ export default function OnboardingPage() {
                 <Button
                   onClick={handleNext}
                   disabled={currentStep === 0 && formData.interests.length === 0}
-                  className="btn-primary flex items-center space-x-2"
+                  className="btn-primary-light flex items-center space-x-2"
                 >
                   <span>Next</span>
                   <ArrowRight className="w-4 h-4" />
@@ -385,7 +385,7 @@ export default function OnboardingPage() {
                 <Button
                   onClick={handleSubmit}
                   disabled={isSubmitting || formData.interests.length === 0}
-                  className="btn-primary flex items-center space-x-2"
+                  className="btn-primary-light flex items-center space-x-2"
                 >
                   {isSubmitting ? (
                     <>

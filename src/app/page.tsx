@@ -19,7 +19,7 @@ import {
   Shield,
   TrendingUp
 } from "lucide-react";
-import { SignupModal } from "@/components/signup-modal";
+ import { SignupModal } from "@/components/signup-modal";
 import { LoginModal } from "@/components/login-modal";
 
 interface User {
