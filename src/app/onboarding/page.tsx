@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -43,23 +43,7 @@ interface OnboardingData {
   informationPreferences: string[];
 }
 
-interface RealtimeState {
-  sessionId: string | null;
-  isConnected: boolean;
-  isRecording: boolean;
-  isSpeaking: boolean;
-  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
-  conversationState: 'initializing' | 'listening' | 'speaking' | 'processing' | 'completed';
-  currentTranscript: string;
-  samResponse: string;
-  questionIndex: number;
-  totalQuestions: number;
-  responses: Array<{
-    question: string;
-    response: string;
-    timestamp: string;
-  }>;
-}
+
 
 interface GeneratedContent {
   podcast: {
@@ -130,32 +114,11 @@ export default function OnboardingPage() {
 
   const [customInterest, setCustomInterest] = useState('');
 
-  // Realtime state
-  const [realtimeState, setRealtimeState] = useState<RealtimeState>({
-    sessionId: null,
-    isConnected: false,
-    isRecording: false,
-    isSpeaking: false,
-    connectionStatus: 'disconnected',
-    conversationState: 'initializing',
-    currentTranscript: '',
-    samResponse: '',
-    questionIndex: 0,
-    totalQuestions: 5,
-    responses: []
-  });
-
   // ElevenLabs conversation state
   const { user, loading } = useAuth();
   const [microphonePermission, setMicrophonePermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
-
-  const wsRef = useRef<WebSocket | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
 
   const manualSteps = [
     { title: 'Interests', key: 'interests' as keyof OnboardingData },
@@ -204,138 +167,16 @@ export default function OnboardingPage() {
     checkOnboardingStatus();
   }, [user, loading, router]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      cleanup();
-    };
-  }, []);
 
-  const cleanup = () => {
-    if (wsRef.current) {
-      wsRef.current.close();
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (workletNodeRef.current) {
-      workletNodeRef.current.disconnect();
-      workletNodeRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-    }
-  };
 
-  const startRealtimeOnboarding = async () => {
-    setMode('realtime');
-    await initializeRealtimeSession();
-  };
+
 
   const startManualOnboarding = () => {
     setMode('manual');
     setCurrentStep(0);
   };
 
-  const initializeRealtimeSession = async () => {
-    try {
-      setRealtimeState(prev => ({ ...prev, connectionStatus: 'connecting' }));
-      
-      const sessionResponse = await fetch('/api/realtime-onboarding', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'start_session' })
-      });
 
-      if (sessionResponse.ok) {
-        const sessionData = await sessionResponse.json();
-        
-        setRealtimeState(prev => ({
-          ...prev,
-          sessionId: sessionData.sessionId,
-          totalQuestions: sessionData.totalQuestions
-        }));
-
-        const apiKeyResponse = await fetch('/api/realtime-onboarding', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'get_api_key' })
-        });
-
-        if (apiKeyResponse.ok) {
-          const apiKeyData = await apiKeyResponse.json();
-          
-          if (apiKeyData.error) {
-            console.error('Failed to get API key:', apiKeyData.error);
-            setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-            return;
-          }
-
-          await connectToRealtimeAPI();
-        }
-      }
-    } catch (error) {
-      console.error('Failed to initialize realtime session:', error);
-      setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-    }
-  };
-
-  const connectToRealtimeAPI = async () => {
-    const url = `wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17`;
-    
-    wsRef.current = new WebSocket(url);
-
-    wsRef.current.onopen = () => {
-      setRealtimeState(prev => ({ 
-        ...prev, 
-        isConnected: true, 
-        connectionStatus: 'connected',
-        conversationState: 'listening'
-      }));
-      
-      // Send session configuration
-      wsRef.current?.send(JSON.stringify({
-        type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: `You are Sam, a friendly AI assistant helping users with their onboarding. 
-          Keep responses conversational and engaging. Ask about their interests, content preferences, 
-          daily time availability, communication style, learning goals, and how they like to receive information.
-          Keep each question focused and wait for their response before continuing.`,
-          voice: 'alloy',
-          output_audio_format: 'pcm16',
-          input_audio_format: 'pcm16',
-          input_audio_transcription: {
-            model: 'whisper-1'
-          }
-        }
-      }));
-
-      // Start the conversation
-      startConversation();
-    };
-
-    wsRef.current.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      handleRealtimeMessage(message);
-    };
-
-    wsRef.current.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-    };
-
-    wsRef.current.onclose = () => {
-      setRealtimeState(prev => ({ 
-        ...prev, 
-        isConnected: false, 
-        connectionStatus: 'disconnected'
-      }));
-    };
-  };
 
   const startConversation = async () => {
     // Request microphone access if not already granted
@@ -358,100 +199,7 @@ export default function OnboardingPage() {
     }
   };
 
-  const handleRealtimeMessage = async (message: { type: string; delta?: string; transcript?: string; [key: string]: unknown }) => {
-    switch (message.type) {
-      case 'response.audio.delta':
-        if (message.delta) {
-          await playAudioDelta(message.delta);
-        }
-        break;
-      
-      case 'response.text.delta':
-        if (message.delta) {
-          setRealtimeState(prev => ({
-            ...prev,
-            samResponse: prev.samResponse + message.delta
-          }));
-        }
-        break;
 
-      case 'input_audio_buffer.speech_started':
-        setRealtimeState(prev => ({ ...prev, isRecording: true }));
-        break;
-
-      case 'input_audio_buffer.speech_stopped':
-        setRealtimeState(prev => ({ ...prev, isRecording: false }));
-        break;
-
-      case 'conversation.item.input_audio_transcription.completed':
-        if (message.transcript) {
-          setRealtimeState(prev => ({
-            ...prev,
-            currentTranscript: message.transcript as string
-          }));
-        }
-        break;
-
-      case 'response.done':
-        // Check if we've completed the onboarding questions
-        if (realtimeState.questionIndex >= realtimeState.totalQuestions - 1) {
-          await completeRealtimeOnboarding();
-        }
-        break;
-    }
-  };
-
-  const playAudioDelta = async (base64Audio: string) => {
-    // Audio playback implementation (simplified)
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext();
-      }
-
-      const audioData = atob(base64Audio);
-      const arrayBuffer = new ArrayBuffer(audioData.length);
-      const view = new Uint8Array(arrayBuffer);
-      
-      for (let i = 0; i < audioData.length; i++) {
-        view[i] = audioData.charCodeAt(i);
-      }
-
-      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
-      const source = audioContextRef.current.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContextRef.current.destination);
-      source.start();
-    } catch (error) {
-      console.error('Error playing audio:', error);
-    }
-  };
-
-  const completeRealtimeOnboarding = async () => {
-    setRealtimeState(prev => ({ ...prev, conversationState: 'completed' }));
-    
-    // Extract onboarding data from conversation
-    const extractedData = await extractOnboardingDataFromConversation();
-    setOnboardingData(extractedData);
-    
-    setMode('processing');
-    await generateContent(extractedData);
-  };
-
-  const extractOnboardingDataFromConversation = async (): Promise<OnboardingData> => {
-    // This would use AI to analyze the conversation and extract structured data
-    // For now, return a sample structure
-    return {
-      interests: ['Technology & AI', 'Business & Startups'],
-      contentFormats: ['podcast'],
-      dailyTime: 15,
-      podcastStyle: 'conversational',
-      preferredSpeed: 1.5,
-      personalityTraits: ['curious', 'analytical'],
-      communicationStyle: 'Casual & Conversational',
-      learningGoals: ['Stay current with industry trends', 'Develop specific skills'],
-      informationPreferences: ['Quick daily updates', 'Expert interviews']
-    };
-  };
 
   const handleManualStepChange = (key: keyof OnboardingData, value: string | number | string[]) => {
     setOnboardingData(prev => ({ ...prev, [key]: value }));
@@ -782,33 +530,16 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
     try {
       console.log('Completing interests and goals phase:', parameters.interests_and_goals);
       
-      const response = await fetch('/api/preferences', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          interests: [parameters.interests_and_goals],
-          contentFormat: 'podcast',
-          dailyTime: 480,
-          podcastStyle: 'conversational',
-          preferredSpeed: 1.0,
-          mantra: '',
-          user_email: user?.email || null
-        }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        console.log('Interests saved successfully:', result);
-        return 'Interests saved successfully';
-      } else {
-        console.error('Failed to save interests');
-        return 'Failed to save interests';
-      }
+      // Update the onboarding data with the interests string
+      setOnboardingData(prev => ({
+        ...prev,
+        interests: [parameters.interests_and_goals] // Store as single string in array
+      }));
+      
+      return 'Interests and goals saved successfully';
     } catch (error) {
       console.error('Error in completeInterestsAndGoalsPhase:', error);
-      return 'Error saving interests';
+      return 'Error saving interests and goals';
     }
   };
 
@@ -816,34 +547,40 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
     try {
       console.log('Completing format and frequency phase:', parameters);
       
-      const response = await fetch('/api/preferences', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contentFormat: parameters.format,
-          dailyTime: 480,
-          interests: [],
-          podcastStyle: 'conversational',
-          preferredSpeed: 1.0,
-          mantra: '',
-          user_email: user?.email || null
-        }),
-      });
+      // Update the onboarding data with format and frequency
+      setOnboardingData(prev => ({
+        ...prev,
+        contentFormats: [parameters.format],
+        // Map frequency to dailyTime (you can adjust this mapping as needed)
+        dailyTime: parameters.frequency.toLowerCase().includes('daily') ? 15 : 
+                  parameters.frequency.toLowerCase().includes('weekly') ? 60 : 30
+      }));
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('Preferences saved successfully:', result);
-        return 'Preferences saved successfully';
-      } else {
-        console.error('Failed to save preferences');
-        return 'Failed to save preferences';
-      }
+      // Complete the voice onboarding and proceed to content generation
+      await completeVoiceOnboarding();
+      
+      return 'Format and frequency preferences saved successfully';
     } catch (error) {
       console.error('Error in completeFormatAndFrequencyPhase:', error);
-      return 'Error saving preferences';
+      return 'Error saving format and frequency preferences';
     }
+  };
+
+  const completeVoiceOnboarding = async () => {
+    // Set default values for fields not collected via voice
+    const finalOnboardingData = {
+      ...onboardingData,
+      podcastStyle: 'conversational',
+      preferredSpeed: 1.5,
+      personalityTraits: ['curious'],
+      communicationStyle: 'Casual & Conversational',
+      learningGoals: ['Stay current with industry trends'],
+      informationPreferences: ['Quick daily updates']
+    };
+
+    setOnboardingData(finalOnboardingData);
+    setMode('processing');
+    await generateContent(finalOnboardingData);
   };
 
   // Initialize the conversation with client tools
@@ -853,7 +590,10 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
     },
     onDisconnect: () => {
       console.log('Disconnected from ElevenLabs Conversational AI');
-      router.push('/dashboard');
+      // Only redirect if we're not already in processing mode
+      if (mode !== 'processing') {
+        router.push('/dashboard');
+      }
     },
     onMessage: (message) => {
       console.log('Message received:', message);
@@ -953,19 +693,19 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
               </div>
 
               <div className="grid md:grid-cols-2 gap-8 mb-8">
-                {/* Realtime Option */}
+                {/* Voice Agent Option */}
                 <motion.div
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
                   className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 cursor-pointer"
-                  onClick={startRealtimeOnboarding}
+                  onClick={() => setMode('realtime')}
                 >
                   <div className="mb-6">
                     <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
                       <MessageSquare className="w-8 h-8 text-white" />
                     </div>
                     <h3 className="text-2xl font-semibold text-white mb-2">
-                      Chat with Sam
+                      Chat with AI Assistant
                     </h3>
                     <p className="text-gray-300">
                       Have a natural conversation with our AI assistant to personalize your experience
@@ -1034,7 +774,7 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
             </motion.div>
           )}
 
-          {/* Realtime Conversation */}
+          {/* Voice Conversation */}
           {mode === 'realtime' && (
             <motion.div
               key="realtime"
