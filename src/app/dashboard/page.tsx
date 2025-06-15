@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
+import { useAuth } from "@/contexts/auth-context";
 
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -122,6 +123,7 @@ interface PodcastSegment {
   speaker: string;
   text: string;
   timestamp: number;
+  audioElement?: HTMLAudioElement;
 }
 
 interface PodcastState {
@@ -129,6 +131,7 @@ interface PodcastState {
   currentSegmentIndex: number;
   isPlaying: boolean;
   isGeneratingAudio: boolean;
+  isPreGeneratingAudio: boolean;
   audioProgress: number;
   totalDuration: number;
   currentAudio: HTMLAudioElement | null;
@@ -144,11 +147,66 @@ interface PodcastState {
   aiResponse: string;
   showAiResponse: boolean;
   currentAiAudio: HTMLAudioElement | null;
+  audioPreGenerated: boolean;
 }
 
+// Format report content with proper HTML structure and styling
+const formatReportContent = (content: string): string => {
+  // Split content into paragraphs
+  const paragraphs = content.split(/\n\s*\n/);
+  
+  return paragraphs.map(paragraph => {
+    const trimmed = paragraph.trim();
+    if (!trimmed) return '';
+    
+    // Check if it's a heading (starts with # or is all caps and short)
+    if (trimmed.startsWith('#') || (trimmed === trimmed.toUpperCase() && trimmed.length < 80 && !trimmed.includes('.'))) {
+      const headingText = trimmed.replace(/^#+\s*/, '');
+      return `<h2 class="text-2xl font-bold text-white mt-8 mb-4 border-b border-white/20 pb-2">${headingText}</h2>`;
+    }
+    
+    // Check if it's a subheading (contains colons or starts with numbers/letters followed by dots)
+    if (trimmed.match(/^(\d+\.|[A-Z]\.|[IVX]+\.)/) || trimmed.includes(':') && trimmed.length < 100) {
+      return `<h3 class="text-xl font-semibold text-green-400 mt-6 mb-3">${trimmed}</h3>`;
+    }
+    
+    // Check if it's a list item (starts with -, *, •, or numbers)
+    if (trimmed.match(/^[-*•]\s+/) || trimmed.match(/^\d+\.\s+/)) {
+      const listItems = trimmed.split('\n').filter(line => line.trim());
+      const formattedItems = listItems.map(item => {
+        const cleanItem = item.replace(/^[-*•]\s*/, '').replace(/^\d+\.\s*/, '');
+        return `<li class="text-gray-300 mb-2 pl-2">${cleanItem}</li>`;
+      }).join('');
+      return `<ul class="list-disc list-inside space-y-2 ml-4 mb-4">${formattedItems}</ul>`;
+    }
+    
+    // Format bold text (**text** or __text__)
+    let formatted = trimmed.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>');
+    formatted = formatted.replace(/__(.*?)__/g, '<strong class="text-white font-semibold">$1</strong>');
+    
+    // Format italic text (*text* or _text_)
+    formatted = formatted.replace(/\*(.*?)\*/g, '<em class="text-blue-300 italic">$1</em>');
+    formatted = formatted.replace(/_(.*?)_/g, '<em class="text-blue-300 italic">$1</em>');
+    
+    // Format inline code (`code`)
+    formatted = formatted.replace(/`([^`]+)`/g, '<code class="bg-white/10 text-green-300 px-2 py-1 rounded text-sm font-mono">$1</code>');
+    
+    // Format quotes (lines starting with >)
+    if (trimmed.startsWith('>')) {
+      const quote = trimmed.replace(/^>\s*/, '');
+      return `<blockquote class="border-l-4 border-purple-500 pl-4 italic text-purple-200 bg-purple-900/20 py-3 my-4 rounded-r">${quote}</blockquote>`;
+    }
+    
+    // Replace single newlines with <br/> within paragraphs
+    formatted = formatted.replace(/\n/g, '<br/>');
+    
+    // Regular paragraph
+    return `<p class="text-gray-300 leading-relaxed text-lg mb-4">${formatted}</p>`;
+  }).filter(Boolean).join('');
+};
+
 export default function DashboardPage() {
-  const [, setUser] = useState<User | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const { user, loading, signOut } = useAuth();
   const [onboardingData, setOnboardingData] = useState<OnboardingData | null>(null);
   const [contentCards, setContentCards] = useState<ContentCard[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentCard | null>(null);
@@ -160,6 +218,7 @@ export default function DashboardPage() {
     currentSegmentIndex: 0,
     isPlaying: false,
     isGeneratingAudio: false,
+    isPreGeneratingAudio: false,
     audioProgress: 0,
     totalDuration: 0,
     currentAudio: null,
@@ -174,7 +233,8 @@ export default function DashboardPage() {
     wasPlayingBeforeModal: false,
     aiResponse: '',
     showAiResponse: false,
-    currentAiAudio: null
+    currentAiAudio: null,
+    audioPreGenerated: false
   });
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
@@ -190,18 +250,16 @@ export default function DashboardPage() {
 
   // Check authentication and load onboarding data
   useEffect(() => {
-    const checkAuthAndLoadData = async () => {
+    if (loading) return; // Wait for auth to load
+    
+    if (!user) {
+      // Not authenticated, redirect to home
+      window.location.href = '/';
+      return;
+    }
+
+    const loadData = async () => {
       try {
-        // Check authentication
-        const authResponse = await fetch('/api/auth');
-        if (authResponse.ok) {
-          const authData = await authResponse.json();
-          setUser(authData);
-        } else {
-          // Not authenticated, redirect to login
-          window.location.href = '/';
-          return;
-        }
 
         // Load user preferences from database
         const preferencesResponse = await fetch('/api/preferences');
@@ -281,7 +339,10 @@ export default function DashboardPage() {
               // Parse podcast script into segments if podcast content exists
               if (content.podcast && content.podcast.script) {
                 const segments = parsePodcastScript(content.podcast.script);
+                
                 setPodcastState(prev => ({ ...prev, segments }));
+                // Start pre-generating audio immediately
+                preGenerateAllAudioSegments(segments);
               }
             }
           } else {
@@ -300,12 +361,10 @@ export default function DashboardPage() {
         // On error, redirect to onboarding
         window.location.href = '/onboarding';
         return;
-      } finally {
-        setIsCheckingAuth(false);
       }
     };
 
-    checkAuthAndLoadData();
+    loadData();
 
     // Poll for content generation completion
     const pollInterval = setInterval(() => {
@@ -319,7 +378,10 @@ export default function DashboardPage() {
         // Parse podcast script into segments
         if (content.podcast && content.podcast.script) {
           const segments = parsePodcastScript(content.podcast.script);
-          setPodcastState(prev => ({ ...prev, segments }));
+          
+                      setPodcastState(prev => ({ ...prev, segments }));
+            // Start pre-generating audio immediately
+            preGenerateAllAudioSegments(segments);
         }
         
         setContentCards(prev => prev.map(card => ({
@@ -574,28 +636,103 @@ export default function DashboardPage() {
     }
   };
 
-  // Start playing podcast with audio generation
+  // Pre-generate all audio segments when content is ready
+  const preGenerateAllAudioSegments = async (segments: PodcastSegment[]) => {
+    if (segments.length === 0) return;
+    
+    console.log('🎵 Starting pre-generation of all podcast audio segments...');
+    setPodcastState(prev => ({ 
+      ...prev, 
+      isPreGeneratingAudio: true,
+      currentSegmentIndex: 0 // Use this to track pre-generation progress
+    }));
+
+    try {
+      const segmentsWithAudio: PodcastSegment[] = [];
+      
+      // Generate audio for each segment
+      for (let i = 0; i < segments.length; i++) {
+        const segment = segments[i];
+        console.log(`🎵 Pre-generating audio for segment ${i + 1}/${segments.length}: ${segment.speaker}`);
+        
+        // Update progress indicator
+        setPodcastState(prev => ({ 
+          ...prev, 
+          currentSegmentIndex: i
+        }));
+        
+        try {
+          const audio = await generateSegmentAudio(segment);
+          
+          // Store the audio element directly
+          segmentsWithAudio.push({
+            ...segment,
+            audioElement: audio
+          });
+        } catch (error) {
+          console.error(`Failed to generate audio for segment ${i + 1}:`, error);
+          // Add segment without audio URL so it can be retried later
+          segmentsWithAudio.push(segment);
+        }
+      }
+      
+      console.log('✅ Finished pre-generating all podcast audio segments');
+      
+      setPodcastState(prev => ({ 
+        ...prev, 
+        segments: segmentsWithAudio,
+        isPreGeneratingAudio: false,
+        audioPreGenerated: true,
+        currentSegmentIndex: 0 // Reset to start
+      }));
+      
+    } catch (error) {
+      console.error('Error pre-generating audio segments:', error);
+      setPodcastState(prev => ({ 
+        ...prev, 
+        isPreGeneratingAudio: false,
+        currentSegmentIndex: 0 // Reset on error
+      }));
+    }
+  };
+
+  // Start playing podcast with pre-generated audio
   const startPodcastPlayback = async () => {
     if (podcastState.segments.length === 0) return;
     
+    // If audio hasn't been pre-generated yet, wait for it or generate on demand
+    if (!podcastState.audioPreGenerated && !podcastState.isPreGeneratingAudio) {
+      console.log('Audio not pre-generated, starting pre-generation...');
+      await preGenerateAllAudioSegments(podcastState.segments);
+    }
+    
     setPodcastState(prev => ({ 
       ...prev, 
-      isGeneratingAudio: true, 
       currentSegmentIndex: 0,
       isPaused: false
     }));
 
     try {
-      // Generate audio for first segment
+      // Use pre-generated audio or generate first segment if needed
       const firstSegment = podcastState.segments[0];
-      const firstAudio = await generateSegmentAudio(firstSegment);
+      let firstAudio: HTMLAudioElement;
+      
+      if (firstSegment.audioElement) {
+        // Use pre-generated audio
+        firstAudio = firstSegment.audioElement;
+        firstAudio.playbackRate = podcastState.playbackSpeed;
+      } else {
+        // Generate on demand if pre-generation failed
+        setPodcastState(prev => ({ ...prev, isGeneratingAudio: true }));
+        firstAudio = await generateSegmentAudio(firstSegment);
+        setPodcastState(prev => ({ ...prev, isGeneratingAudio: false }));
+      }
       
       audioQueueRef.current = [firstAudio];
       currentAudioRef.current = firstAudio;
       
       setPodcastState(prev => ({ 
         ...prev, 
-        isGeneratingAudio: false,
         isPlaying: true,
         currentAudio: firstAudio
       }));
@@ -612,13 +749,52 @@ export default function DashboardPage() {
     }
   };
 
-  // Play current segment
+  // Play current segment using pre-generated audio
   const playCurrentSegment = (segmentIndex: number) => {
-    const audio = audioQueueRef.current[segmentIndex];
-    if (!audio) return;
+    const segment = podcastState.segments[segmentIndex];
+    if (!segment) return;
 
-    currentAudioRef.current = audio;
-    audio.playbackRate = podcastState.playbackSpeed;
+    let audio: HTMLAudioElement;
+    
+    // Check if we have pre-generated audio
+    if (segment.audioElement) {
+      audio = segment.audioElement;
+      audio.playbackRate = podcastState.playbackSpeed;
+      currentAudioRef.current = audio;
+    } else {
+      // Fallback to audio queue if available
+      audio = audioQueueRef.current[segmentIndex];
+      if (!audio) {
+        console.log('No pre-generated audio found, generating on demand...');
+        // Generate on demand as last resort
+        setPodcastState(prev => ({ ...prev, isGeneratingAudio: true }));
+        generateSegmentAudio(segment)
+          .then(generatedAudio => {
+            audioQueueRef.current[segmentIndex] = generatedAudio;
+            currentAudioRef.current = generatedAudio;
+            setPodcastState(prev => ({ ...prev, isGeneratingAudio: false }));
+            if (!podcastState.isPaused) {
+              generatedAudio.onended = () => {
+                const nextIndex = segmentIndex + 1;
+                if (nextIndex < podcastState.segments.length && !podcastState.isPaused) {
+                  setPodcastState(prev => ({ 
+                    ...prev, 
+                    currentSegmentIndex: nextIndex 
+                  }));
+                  playCurrentSegment(nextIndex);
+                } else {
+                  setPodcastState(prev => ({ ...prev, isPlaying: false }));
+                }
+              };
+              generatedAudio.play().catch(console.error);
+            }
+          })
+          .catch(console.error);
+        return;
+      }
+      currentAudioRef.current = audio;
+      audio.playbackRate = podcastState.playbackSpeed;
+    }
 
     audio.onended = () => {
       const nextIndex = segmentIndex + 1;
@@ -627,22 +803,7 @@ export default function DashboardPage() {
           ...prev, 
           currentSegmentIndex: nextIndex 
         }));
-        
-        // Generate next segment audio if not already generated
-        if (nextIndex >= audioQueueRef.current.length) {
-          setPodcastState(prev => ({ ...prev, isGeneratingAudio: true }));
-          generateSegmentAudio(podcastState.segments[nextIndex])
-            .then(nextAudio => {
-              audioQueueRef.current.push(nextAudio);
-              setPodcastState(prev => ({ ...prev, isGeneratingAudio: false }));
-              if (!podcastState.isPaused) {
-                playCurrentSegment(nextIndex);
-              }
-            })
-            .catch(console.error);
-        } else {
-          playCurrentSegment(nextIndex);
-        }
+        playCurrentSegment(nextIndex);
       } else {
         setPodcastState(prev => ({ ...prev, isPlaying: false }));
       }
@@ -723,7 +884,7 @@ export default function DashboardPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/logout', { method: 'POST' });
+      await signOut();
       localStorage.clear();
       window.location.href = '/';
     } catch (error) {
@@ -915,7 +1076,7 @@ export default function DashboardPage() {
     }
   };
 
-  if (isCheckingAuth) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800 flex items-center justify-center">
         <div className="text-center">
@@ -991,11 +1152,16 @@ export default function DashboardPage() {
                   <div className="flex justify-center space-x-4 mb-6">
                     <Button
                       onClick={podcastState.segments.length > 0 && !podcastState.isPlaying ? startPodcastPlayback : togglePodcastPlayback}
-                      disabled={podcastState.isGeneratingAudio || podcastState.segments.length === 0}
+                      disabled={podcastState.isGeneratingAudio || podcastState.isPreGeneratingAudio || podcastState.segments.length === 0}
                       size="lg"
                       className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
                     >
-                      {podcastState.isGeneratingAudio ? (
+                      {podcastState.isPreGeneratingAudio ? (
+                        <>
+                          <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                          Preparing Audio...
+                        </>
+                      ) : podcastState.isGeneratingAudio ? (
                         <>
                           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                           Generating Audio...
@@ -1098,6 +1264,31 @@ export default function DashboardPage() {
                   )}
 
                   {/* Status Messages */}
+                  {podcastState.isPreGeneratingAudio && (
+                    <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-3 mb-4">
+                      <p className="text-blue-200 text-sm mb-2">
+                        🎵 Pre-generating all audio segments for instant playback... This only happens once!
+                      </p>
+                      <div className="flex items-center space-x-2">
+                        <Progress 
+                          value={((podcastState.currentSegmentIndex + 1) / podcastState.segments.length) * 100} 
+                          className="h-2 flex-1" 
+                        />
+                        <span className="text-xs text-blue-300">
+                          {podcastState.currentSegmentIndex + 1}/{podcastState.segments.length}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {podcastState.audioPreGenerated && !podcastState.isPlaying && (
+                    <div className="bg-green-500/20 border border-green-500/30 rounded-lg p-3 mb-4">
+                      <p className="text-green-200 text-sm">
+                        ✅ Audio ready! Click play to start listening instantly.
+                      </p>
+                    </div>
+                  )}
+
                   {podcastState.isGeneratingAudio && (
                     <div className="bg-yellow-500/20 border border-yellow-500/30 rounded-lg p-3 mb-4">
                       <p className="text-yellow-200 text-sm">
@@ -1310,22 +1501,36 @@ export default function DashboardPage() {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20"
+                className="bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 overflow-hidden"
               >
-                <div className="text-center mb-8">
-                  <FileText className="w-16 h-16 text-green-500 mx-auto mb-4" />
+                {/* Header */}
+                <div className="bg-gradient-to-r from-green-500/20 to-emerald-500/20 border-b border-white/20 p-8 text-center">
+                  <FileText className="w-16 h-16 text-green-400 mx-auto mb-4" />
                   <h1 className="text-3xl font-bold text-white mb-2">
                     {generatedContent.richTextReport.title}
                   </h1>
+                  <p className="text-green-200 text-sm">
+                    Comprehensive Analysis Report
+                  </p>
                 </div>
 
-                <div className="prose prose-invert max-w-none">
-                  <div 
-                    className="text-gray-300 leading-relaxed"
-                    dangerouslySetInnerHTML={{ 
-                      __html: generatedContent.richTextReport.content.replace(/\n/g, '<br/>') 
-                    }}
-                  />
+                {/* Content */}
+                <div className="p-8">
+                  <div className="max-w-4xl mx-auto">
+                    <div 
+                      className="formatted-content"
+                      dangerouslySetInnerHTML={{ 
+                        __html: formatReportContent(generatedContent.richTextReport.content)
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="bg-white/5 border-t border-white/10 p-6 text-center">
+                  <p className="text-gray-400 text-sm">
+                    Generated based on your interests and preferences
+                  </p>
                 </div>
               </motion.div>
             )}

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
+import { useAuth } from "@/contexts/auth-context";
 import {
   User, 
   Mic, 
@@ -145,8 +146,7 @@ export default function OnboardingPage() {
   });
 
   // ElevenLabs conversation state
-  const [user] = useState<User | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const { user, loading } = useAuth();
   const [microphonePermission, setMicrophonePermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [volume, setVolume] = useState(0.8);
   const [isMuted, setIsMuted] = useState(false);
@@ -168,20 +168,19 @@ export default function OnboardingPage() {
 
   // Check authentication status on mount
   useEffect(() => {
-    const checkAuthStatus = async () => {
+    if (loading) return; // Wait for auth to load
+    
+    if (!user) {
+      // Not authenticated, redirect to home
+      console.log('❌ User not authenticated, redirecting to login');
+      window.location.href = '/';
+      return;
+    }
+
+    console.log('✅ User authenticated:', user.email);
+
+    const checkOnboardingStatus = async () => {
       try {
-        // Check authentication
-        const authResponse = await fetch('/api/auth');
-        if (!authResponse.ok) {
-          // Not authenticated, redirect to login
-          console.log('❌ User not authenticated, redirecting to login');
-          window.location.href = '/';
-          return;
-        }
-
-        const authData = await authResponse.json();
-        console.log('✅ User authenticated:', authData.email);
-
         // Check if user has already completed onboarding
         const preferencesResponse = await fetch('/api/preferences');
         if (preferencesResponse.ok) {
@@ -198,17 +197,12 @@ export default function OnboardingPage() {
         console.log('🎯 User needs to complete onboarding, proceeding...');
         
       } catch (error) {
-        console.error('❌ Error in auth check:', error);
-        // On error, redirect to login
-        window.location.href = '/';
-        return;
-      } finally {
-        setIsCheckingAuth(false);
+        console.error('❌ Error checking onboarding status:', error);
       }
     };
 
-    checkAuthStatus();
-  }, [router]);
+    checkOnboardingStatus();
+  }, [user, loading, router]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -553,14 +547,73 @@ export default function OnboardingPage() {
   };
 
   const generateContentInBackground = async (data: OnboardingData): Promise<GeneratedContent> => {
-    console.log('⏱️ Starting 3-second content generation simulation...');
+    console.log('⏱️ Starting enhanced content generation...');
     
-    // For demo purposes, simulate content generation with delay
-    await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
-    
-    console.log('🎯 Generating demo content...');
-    
-    const demoContent = {
+    try {
+      // Generate comprehensive user profile summary first
+      const summaryResponse = await fetch('/api/generate-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ onboardingData: data })
+      });
+
+      if (!summaryResponse.ok) {
+        throw new Error('Failed to generate profile summary');
+      }
+
+      const summaryData = await summaryResponse.json();
+      const profileSummary = summaryData.summary;
+
+      console.log('✅ Profile summary generated, creating enhanced content...');
+
+      // Generate high-quality content using enhanced API
+      const contentResponse = await fetch('/api/generate-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: profileSummary,
+          interests: data.interests,
+          preferences: data
+        })
+      });
+
+      if (!contentResponse.ok) {
+        throw new Error('Failed to generate enhanced content');
+      }
+
+      const enhancedContent = await contentResponse.json();
+      
+      console.log('🎉 Enhanced content generated successfully!');
+      
+      return {
+        podcast: enhancedContent.podcast || {
+          title: `${data.interests.slice(0, 2).join(' & ')} Deep Dive`,
+          description: `An insightful analysis of ${data.interests.join(' and ')}`,
+          script: `Enhanced podcast content for ${data.interests.join(', ')}`
+        },
+        richTextReport: enhancedContent.richTextReport || {
+          title: `${data.interests[0]} Strategic Analysis`,
+          content: `# ${data.interests[0]} Intelligence Report\n\nComprehensive analysis and insights...`,
+          url: `/reports/enhanced-${Date.now()}`
+        },
+        tikTokScript: enhancedContent.tikTokScript || {
+          title: `${data.interests[0]} Breakthrough`,
+          transcript: `60-second insight into ${data.interests[0]}`,
+          scenes: []
+        }
+      };
+
+    } catch (error) {
+      console.error('Error generating enhanced content:', error);
+      console.log('🔄 Falling back to demo content...');
+      
+      // Fallback to improved demo content
+      return generateEnhancedDemoContent(data);
+    }
+  };
+
+  const generateEnhancedDemoContent = (data: OnboardingData): GeneratedContent => {
+    return {
       podcast: {
         title: `${data.interests.slice(0, 2).join(' & ')} Weekly: Your Personalized Update`,
         description: `A ${data.dailyTime}-minute deep dive into the latest developments in ${data.interests.slice(0, 2).join(' and ')}, tailored specifically for your ${data.communicationStyle.toLowerCase()} preference.`,
@@ -672,9 +725,6 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
         ]
       }
     };
-
-    console.log('🎉 Demo content generated successfully!');
-    return demoContent;
   };
 
   const addCustomInterest = () => {
@@ -845,7 +895,7 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
     }
   };
 
-  if (isCheckingAuth) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800 flex items-center justify-center">
         <div className="text-center">
