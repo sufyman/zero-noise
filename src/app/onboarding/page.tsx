@@ -1,9 +1,24 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { User, Mic, Volume2, Loader2, MicOff } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { 
+  User, 
+  Mic, 
+  Loader2, 
+  MicOff, 
+  MessageSquare, 
+  Edit3,
+  Check,
+  ChevronRight,
+  Headphones,
+  FileText,
+  Video,
+  Play,
+  ExternalLink
+} from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface User {
@@ -11,6 +26,18 @@ interface User {
   joinedAt: string;
   lastLogin: string;
   source?: string;
+}
+
+interface OnboardingData {
+  interests: string[];
+  contentFormats: string[];
+  dailyTime: number;
+  podcastStyle: string;
+  preferredSpeed: number;
+  personalityTraits: string[];
+  communicationStyle: string;
+  learningGoals: string[];
+  informationPreferences: string[];
 }
 
 interface RealtimeState {
@@ -21,7 +48,7 @@ interface RealtimeState {
   connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   conversationState: 'initializing' | 'listening' | 'speaking' | 'processing' | 'completed';
   currentTranscript: string;
-  alexResponse: string;
+  samResponse: string;
   questionIndex: number;
   totalQuestions: number;
   responses: Array<{
@@ -29,26 +56,82 @@ interface RealtimeState {
     response: string;
     timestamp: string;
   }>;
-  report: {
-    sessionId: string;
-    timestamp: string;
-    userProfile: {
-      interests: string[];
-      contentFormat: string;
-      dailyTime: number;
-      podcastStyle: string;
-      preferredSpeed: number;
-      personalityTraits: string[];
-      communicationStyle: string;
-      learningGoals: string[];
-    };
-    profileSummary: string;
-  } | null;
 }
 
-export default function RealtimeOnboardingPage() {
-  const [user, setUser] = useState<User | null>(null);
+interface GeneratedContent {
+  podcast: {
+    title: string;
+    description: string;
+    script: string;
+    audioUrl?: string;
+  };
+  richTextReport: {
+    title: string;
+    content: string;
+    url?: string;
+  };
+  tikTokScript: {
+    title: string;
+    transcript: string;
+    scenes: Array<{
+      text: string;
+      duration: number;
+      emotion: string;
+    }>;
+  };
+}
+
+type OnboardingMode = 'choice' | 'realtime' | 'manual' | 'processing' | 'complete';
+
+const INTEREST_OPTIONS = [
+  'Technology & AI', 'Business & Startups', 'Marketing & Sales', 'Finance & Investing',
+  'Health & Wellness', 'Science & Research', 'Politics & Current Events', 'Arts & Culture',
+  'Education & Learning', 'Sports & Fitness', 'Travel & Lifestyle', 'Environment & Sustainability'
+];
+
+const CONTENT_FORMAT_OPTIONS = [
+  { value: 'podcast', label: 'Audio Podcasts', icon: Headphones },
+  { value: 'text', label: 'Text Articles', icon: FileText },
+  { value: 'video', label: 'Video Content', icon: Video },
+  { value: 'mixed', label: 'Mixed Formats', icon: MessageSquare }
+];
+
+const COMMUNICATION_STYLES = [
+  'Analytical & Data-driven', 'Energetic & Motivational', 'Casual & Conversational',
+  'Professional & Formal', 'Creative & Inspirational', 'Balanced & Informative'
+];
+
+const LEARNING_GOALS = [
+  'Stay current with industry trends', 'Develop specific skills', 'Get inspiration for projects',
+  'Network and connect with others', 'Make better decisions', 'Expand general knowledge'
+];
+
+const INFORMATION_PREFERENCES = [
+  'Quick daily updates', 'Deep-dive analysis', 'Breaking news alerts',
+  'Weekly summaries', 'Expert interviews', 'Case studies & examples'
+];
+
+export default function OnboardingPage() {
+  // const [user] = useState<User | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [mode, setMode] = useState<OnboardingMode>('choice');
+  const [onboardingData, setOnboardingData] = useState<OnboardingData>({
+    interests: [],
+    contentFormats: ['podcast'],
+    dailyTime: 15,
+    podcastStyle: 'conversational',
+    preferredSpeed: 1.5,
+    personalityTraits: [],
+    communicationStyle: '',
+    learningGoals: [],
+    informationPreferences: []
+  });
+  const [currentStep, setCurrentStep] = useState(0);
+  const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [customInterest, setCustomInterest] = useState('');
+
+  // Realtime state
   const [realtimeState, setRealtimeState] = useState<RealtimeState>({
     sessionId: null,
     isConnected: false,
@@ -57,41 +140,64 @@ export default function RealtimeOnboardingPage() {
     connectionStatus: 'disconnected',
     conversationState: 'initializing',
     currentTranscript: '',
-    alexResponse: '',
+    samResponse: '',
     questionIndex: 0,
     totalQuestions: 5,
-    responses: [],
-    report: null
+    responses: []
   });
 
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const audioQueueRef = useRef<Float32Array[]>([]);
-  const isPlayingAudioRef = useRef(false);
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
+  const responseInProgressRef = useRef(false);
   const router = useRouter();
+
+  const manualSteps = [
+    { title: 'Interests', key: 'interests' as keyof OnboardingData },
+    { title: 'Content Formats', key: 'contentFormats' as keyof OnboardingData },
+    { title: 'Time Preference', key: 'dailyTime' as keyof OnboardingData },
+    { title: 'Communication Style', key: 'communicationStyle' as keyof OnboardingData },
+    { title: 'Learning Goals', key: 'learningGoals' as keyof OnboardingData },
+    { title: 'Information Preferences', key: 'informationPreferences' as keyof OnboardingData }
+  ];
 
   // Check authentication status on mount
   useEffect(() => {
     const checkAuthStatus = async () => {
       try {
-        const response = await fetch('/api/auth');
-        if (response.ok) {
-          const data = await response.json();
-          if (data.authenticated) {
-            setUser(data.user);
-            await initializeRealtimeSession();
-          } else {
-            router.push('/');
-            return;
-          }
-        } else {
-          router.push('/');
+        // Check authentication
+        const authResponse = await fetch('/api/auth');
+        if (!authResponse.ok) {
+          // Not authenticated, redirect to login
+          console.log('❌ User not authenticated, redirecting to login');
+          window.location.href = '/';
           return;
         }
-      } catch {
-        router.push('/');
+
+        const authData = await authResponse.json();
+        console.log('✅ User authenticated:', authData.email);
+
+        // Check if user has already completed onboarding
+        const preferencesResponse = await fetch('/api/preferences');
+        if (preferencesResponse.ok) {
+          const preferencesData = await preferencesResponse.json();
+          
+          if (preferencesData.hasPreferences) {
+            // User has already completed onboarding, redirect to dashboard
+            console.log('✅ User has completed onboarding, redirecting to dashboard');
+            router.push('/dashboard');
+            return;
+          }
+        }
+
+        console.log('🎯 User needs to complete onboarding, proceeding...');
+        
+      } catch (error) {
+        console.error('❌ Error in auth check:', error);
+        // On error, redirect to login
+        window.location.href = '/';
         return;
       } finally {
         setIsCheckingAuth(false);
@@ -118,14 +224,29 @@ export default function RealtimeOnboardingPage() {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
     }
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect();
+      workletNodeRef.current = null;
+    }
     if (audioContextRef.current) {
       audioContextRef.current.close();
     }
   };
 
+  const startRealtimeOnboarding = async () => {
+    setMode('realtime');
+    await initializeRealtimeSession();
+  };
+
+  const startManualOnboarding = () => {
+    setMode('manual');
+    setCurrentStep(0);
+  };
+
   const initializeRealtimeSession = async () => {
     try {
-      // Start a new session
+      setRealtimeState(prev => ({ ...prev, connectionStatus: 'connecting' }));
+      
       const sessionResponse = await fetch('/api/realtime-onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -134,13 +255,13 @@ export default function RealtimeOnboardingPage() {
 
       if (sessionResponse.ok) {
         const sessionData = await sessionResponse.json();
+        
         setRealtimeState(prev => ({
           ...prev,
           sessionId: sessionData.sessionId,
           totalQuestions: sessionData.totalQuestions
         }));
 
-        // Get API key for direct connection (since ephemeral tokens require beta header)
         const apiKeyResponse = await fetch('/api/realtime-onboarding', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -150,27 +271,13 @@ export default function RealtimeOnboardingPage() {
         if (apiKeyResponse.ok) {
           const apiKeyData = await apiKeyResponse.json();
           
-          // Check if the response contains an error
           if (apiKeyData.error) {
-            console.error('Failed to get API key:', apiKeyData.error, apiKeyData.details);
+            console.error('Failed to get API key:', apiKeyData.error);
             setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
             return;
           }
-
-          // Validate that we have the required fields
-          if (!apiKeyData.api_key) {
-            console.error('Invalid API key response:', apiKeyData);
-            setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-            return;
-          }
-
-          console.log('Successfully retrieved API key for direct connection');
 
           await connectToRealtimeAPI({ client_secret: apiKeyData.api_key });
-        } else {
-          const errorData = await apiKeyResponse.json().catch(() => ({}));
-          console.error('Failed to get API key:', errorData);
-          setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
         }
       }
     } catch (error) {
@@ -179,757 +286,1036 @@ export default function RealtimeOnboardingPage() {
     }
   };
 
-  const connectToRealtimeAPI = async (tokenData: {
-    client_secret: string;
-    session_id?: string;
-    expires_at?: string;
-  }) => {
-    try {
-      setRealtimeState(prev => ({ ...prev, connectionStatus: 'connecting' }));
+  const connectToRealtimeAPI = async (tokenData: { client_secret: string }) => {
+    const url = `wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17`;
+    
+    wsRef.current = new WebSocket(url);
 
-      console.log('Attempting to connect with API key:', {
-        client_secret_type: typeof tokenData.client_secret,
-        client_secret_length: tokenData.client_secret?.length,
-        client_secret_preview: tokenData.client_secret?.substring(0, 10) + '...'
-      });
-
-      // Validate the API key data
-      if (typeof tokenData.client_secret !== 'string') {
-        throw new Error(`Invalid API key type: ${typeof tokenData.client_secret}`);
-      }
-
-      if (!tokenData.client_secret || tokenData.client_secret.length === 0) {
-        throw new Error('Empty API key');
-      }
-
-      // Initialize audio context
-      audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-
-      // Get microphone access
-      streamRef.current = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 24000,
-          channelCount: 1
-        }
-      });
-
-      console.log('Microphone access granted');
-
-      // Connect to OpenAI Realtime API using API key directly
-      const wsUrl = `wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17`;
-      const subprotocol = `openai-insecure-api-key.${tokenData.client_secret}`;
+    wsRef.current.onopen = () => {
+      setRealtimeState(prev => ({ 
+        ...prev, 
+        isConnected: true, 
+        connectionStatus: 'connected',
+        conversationState: 'listening'
+      }));
       
-      console.log('Creating WebSocket connection:', {
-        url: wsUrl,
-        subprotocol_length: subprotocol.length,
-        subprotocol_preview: subprotocol.substring(0, 50) + '...'
-      });
-
-      const ws = new WebSocket(wsUrl, [
-        'realtime',
-        subprotocol,
-        'openai-beta.realtime-v1'  // Required beta header
-      ]);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log('WebSocket connection opened successfully', {
-          readyState: ws.readyState,
-          url: ws.url,
-          protocol: ws.protocol
-        });
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          connectionStatus: 'connected', 
-          isConnected: true,
-          conversationState: 'listening'
-        }));
-
-        // Wait a moment for any initial session messages, then start the conversation
-        setTimeout(() => {
-          console.log('Starting conversation after WebSocket open...');
-          startConversation();
-        }, 500);
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          console.log('Received WebSocket message:', {
-            type: message.type,
-            full_message: message,
-            message_keys: Object.keys(message)
-          });
-          await handleRealtimeMessage(message);
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', {
-            error,
-            raw_data: event.data
-          });
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error occurred:', {
-          error,
-          readyState: ws.readyState,
-          url: ws.url,
-          protocol: ws.protocol
-        });
-        setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-      };
-
-      ws.onclose = (event) => {
-        console.log('WebSocket connection closed:', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean
-        });
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          connectionStatus: 'disconnected', 
-          isConnected: false 
-        }));
-      };
-
-    } catch (error) {
-      console.error('Failed to connect to Realtime API:', error);
-      setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-    }
-  };
-
-  const startConversation = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      console.log('Starting conversation...');
-      
-      // First, configure the session for audio output
-      const sessionUpdate = {
+      // Send session configuration
+      wsRef.current?.send(JSON.stringify({
         type: 'session.update',
         session: {
           modalities: ['text', 'audio'],
-          instructions: `You are Alex, a friendly and enthusiastic podcast host conducting a voice onboarding interview. You're gathering information to create a personalized podcast experience for the user. 
-
-Your goal is to ask the onboarding questions naturally and conversationally. Start by introducing yourself and asking the first question about the user's professional interests.
-
-Keep your responses:
-- Warm and engaging
-- Conversational, not robotic
-- Brief but encouraging
-- Professional yet friendly
-
-Ask the questions one at a time and wait for the user's response before moving to the next question.
-
-IMPORTANT: Always respond with BOTH text and audio. Make sure to generate audio for every response.`,
+          instructions: `You are Sam, a friendly AI assistant helping users with their onboarding. 
+          Keep responses conversational and engaging. Ask about their interests, content preferences, 
+          daily time availability, communication style, learning goals, and how they like to receive information.
+          Keep each question focused and wait for their response before continuing.`,
           voice: 'alloy',
           output_audio_format: 'pcm16',
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 1000
-          },
           input_audio_format: 'pcm16',
           input_audio_transcription: {
             model: 'whisper-1'
-          },
-          temperature: 0.8,
-          max_response_output_tokens: 4096
+          }
         }
-      };
-      
-      console.log('Configuring session for audio output:', sessionUpdate);
-      wsRef.current.send(JSON.stringify(sessionUpdate));
-      
-              // Wait a moment for session update, then start the conversation
-        setTimeout(() => {
-          if (!wsRef.current) return;
-          
-          // Add a system message to initiate the conversation
-          const systemMessage = {
-            type: 'conversation.item.create',
-            item: {
-              type: 'message',
-              role: 'system',
-              content: [
-                {
-                  type: 'input_text',
-                  text: 'Start the conversation by introducing yourself as Alex and asking the first onboarding question. Respond with both text and audio.'
-                }
-              ]
-            }
-          };
-          
-          console.log('Adding system message:', systemMessage);
-          wsRef.current.send(JSON.stringify(systemMessage));
-          
-          // Request a response from the AI with explicit audio request
-          const responseMessage = {
-            type: 'response.create',
-            response: {
-              modalities: ['audio', 'text'],
-              voice: 'alloy',
-              output_audio_format: 'pcm16'
-            }
-          };
-          
-          console.log('Requesting AI to start conversation with audio:', responseMessage);
-          wsRef.current.send(JSON.stringify(responseMessage));
-          
-          // Start recording after a delay to let AI respond first
-          setTimeout(() => {
-            startRecording();
-          }, 3000);
-        }, 1000);
-    }
+      }));
+
+      // Start the conversation
+      startConversation();
+    };
+
+    wsRef.current.onmessage = (event) => {
+      const message = JSON.parse(event.data);
+      handleRealtimeMessage(message);
+    };
+
+    wsRef.current.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
+    };
+
+    wsRef.current.onclose = () => {
+      setRealtimeState(prev => ({ 
+        ...prev, 
+        isConnected: false, 
+        connectionStatus: 'disconnected'
+      }));
+    };
   };
 
-  const handleRealtimeMessage = async (message: {
-    type: string;
-    transcript?: string;
-    delta?: string;
-    error?: { message: string };
-    item?: { type: string; id: string; status: string; };
-    audio?: string;
-  }) => {
-    console.log('Realtime message:', message.type, message);
+  const startConversation = () => {
+    const initialMessage = "Hi! I&apos;m Sam, your personal AI assistant. I&apos;m excited to help you set up your personalized content experience. Let&apos;s start by getting to know your interests - what topics would you like to stay updated on?";
+    
+    wsRef.current?.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        modalities: ['text', 'audio'],
+        instructions: initialMessage
+      }
+    }));
+  };
 
+  const handleRealtimeMessage = async (message: { type: string; delta?: string; transcript?: string; [key: string]: unknown }) => {
     switch (message.type) {
-      case 'session.created':
-        console.log('Session created successfully');
-        break;
-
-      case 'session.updated':
-        console.log('Session updated successfully');
-        // @ts-expect-error - session property access
-        console.log('Session details:', JSON.stringify(message.session, null, 2));
-        break;
-
-      case 'conversation.created':
-        console.log('Conversation created successfully');
-        break;
-
-      case 'input_audio_buffer.speech_started':
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          conversationState: 'speaking',
-          isSpeaking: true 
-        }));
-        break;
-
-      case 'input_audio_buffer.speech_stopped':
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          conversationState: 'processing',
-          isSpeaking: false 
-        }));
-        break;
-
-      case 'conversation.item.input_audio_transcription.delta':
-        console.log('Transcription delta:', message.delta);
-        break;
-
-      case 'conversation.item.input_audio_transcription.completed':
-        console.log('Transcription completed:', message.transcript);
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          currentTranscript: message.transcript || '' 
-        }));
-        break;
-
-      case 'response.created':
-        console.log('Response created with details:', message);
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          conversationState: 'listening',
-          alexResponse: ''
-        }));
-        break;
-
-      case 'response.output_item.added':
-        console.log('Response item added:', message.item);
-        break;
-
-      case 'response.content_part.added':
-        console.log('Content part added');
-        break;
-
       case 'response.audio.delta':
-        console.log('🎵 Received audio delta:', message.delta ? 'YES' : 'NO');
         if (message.delta) {
-          // Handle streaming audio from Alex
           await playAudioDelta(message.delta);
         }
         break;
-
-      case 'response.audio_transcript.delta':
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          alexResponse: prev.alexResponse + (message.delta || '') 
-        }));
-        break;
-
-      case 'response.audio_transcript.done':
-        console.log('Audio transcript completed');
-        break;
-
-      case 'response.done':
-        console.log('Response done with details:', message);
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          conversationState: 'listening'
-        }));
-        
-        // Store the conversation turn
-        if (realtimeState.currentTranscript && realtimeState.alexResponse) {
+      
+      case 'response.text.delta':
+        if (message.delta) {
           setRealtimeState(prev => ({
             ...prev,
-            responses: [...prev.responses, {
-              question: prev.alexResponse,
-              response: prev.currentTranscript,
-              timestamp: new Date().toISOString()
-            }],
-            questionIndex: prev.questionIndex + 1,
-            currentTranscript: '',
-            alexResponse: ''
+            samResponse: prev.samResponse + message.delta
           }));
         }
         break;
 
-      case 'input_audio_buffer.committed':
-        console.log('Audio buffer committed');
+      case 'input_audio_buffer.speech_started':
+        setRealtimeState(prev => ({ ...prev, isRecording: true }));
         break;
 
-      case 'conversation.item.created':
-        console.log('Conversation item created:', message);
+      case 'input_audio_buffer.speech_stopped':
+        setRealtimeState(prev => ({ ...prev, isRecording: false }));
         break;
 
-      case 'conversation.item.completed':
-        console.log('Conversation item completed:', message);
+      case 'conversation.item.input_audio_transcription.completed':
+        if (message.transcript) {
+          setRealtimeState(prev => ({
+            ...prev,
+            currentTranscript: message.transcript as string
+          }));
+        }
         break;
 
-      case 'response.output_item.done':
-        console.log('Response output item done');
-        break;
-
-      case 'response.content_part.done':
-        console.log('Response content part done');
-        break;
-
-      case 'response.audio_transcript.delta':
-        console.log('🎵 Audio transcript delta:', message.delta);
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          alexResponse: prev.alexResponse + (message.delta || '') 
-        }));
-        break;
-
-      case 'response.output_item.added':
-        console.log('Response output item added:', message);
-        break;
-
-      case 'error':
-        console.error('Realtime API error:', {
-          full_message: message,
-          error_field: message.error,
-          error_type: typeof message.error,
-          error_keys: message.error ? Object.keys(message.error) : 'NO_ERROR_FIELD'
-        });
-        setRealtimeState(prev => ({ ...prev, connectionStatus: 'error' }));
-        break;
-
-      default:
-        console.log('Unhandled message type:', message.type);
+      case 'response.done':
+        // Check if we've completed the onboarding questions
+        if (realtimeState.questionIndex >= realtimeState.totalQuestions - 1) {
+          await completeRealtimeOnboarding();
+        }
         break;
     }
   };
 
   const playAudioDelta = async (base64Audio: string) => {
-    if (!audioContextRef.current) return;
-
+    // Audio playback implementation (simplified)
     try {
-      // Decode base64 audio
-      const binaryString = atob(base64Audio);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AudioContext();
       }
 
-      // Convert PCM16 to Float32Array for Web Audio API
-      const pcm16Array = new Int16Array(bytes.buffer);
-      const floatArray = new Float32Array(pcm16Array.length);
-      for (let i = 0; i < pcm16Array.length; i++) {
-        floatArray[i] = pcm16Array[i] / 32768.0;
-      }
-
-      // Queue audio for playback
-      audioQueueRef.current.push(floatArray);
+      const audioData = atob(base64Audio);
+      const arrayBuffer = new ArrayBuffer(audioData.length);
+      const view = new Uint8Array(arrayBuffer);
       
-      if (!isPlayingAudioRef.current) {
-        playAudioQueue();
+      for (let i = 0; i < audioData.length; i++) {
+        view[i] = audioData.charCodeAt(i);
       }
 
+      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+      const source = audioContextRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContextRef.current.destination);
+      source.start();
     } catch (error) {
-      console.error('Error playing audio delta:', error);
+      console.error('Error playing audio:', error);
     }
   };
 
-  const playAudioQueue = async () => {
-    if (!audioContextRef.current || audioQueueRef.current.length === 0) return;
-
-    isPlayingAudioRef.current = true;
-    setRealtimeState(prev => ({ ...prev, conversationState: 'listening' }));
-
-    while (audioQueueRef.current.length > 0) {
-      const audioData = audioQueueRef.current.shift();
-      if (audioData) {
-        const audioBuffer = audioContextRef.current.createBuffer(1, audioData.length, 24000);
-        audioBuffer.copyToChannel(audioData, 0);
-
-        const source = audioContextRef.current.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContextRef.current.destination);
-        
-        await new Promise<void>((resolve) => {
-          source.onended = () => resolve();
-          source.start();
-        });
-      }
-    }
-
-    isPlayingAudioRef.current = false;
+  const completeRealtimeOnboarding = async () => {
+    setRealtimeState(prev => ({ ...prev, conversationState: 'completed' }));
+    
+    // Extract onboarding data from conversation
+    const extractedData = await extractOnboardingDataFromConversation();
+    setOnboardingData(extractedData);
+    
+    setMode('processing');
+    await generateContent(extractedData);
   };
 
-  const startRecording = async () => {
-    if (!streamRef.current || !wsRef.current) return;
-
-    try {
-      // Create audio processor using Web Audio API for proper PCM16 conversion
-      const audioContext = new AudioContext({ sampleRate: 24000 });
-      const source = audioContext.createMediaStreamSource(streamRef.current);
-      
-      // Create script processor for audio processing
-      const processor = audioContext.createScriptProcessor(1024, 1, 1);
-      
-      processor.onaudioprocess = (event) => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          const inputBuffer = event.inputBuffer;
-          const inputData = inputBuffer.getChannelData(0);
-          
-          // Convert Float32Array to PCM16
-          const pcm16Buffer = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            pcm16Buffer[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-          }
-          
-          // Convert to base64
-          const uint8Array = new Uint8Array(pcm16Buffer.buffer);
-          const base64Audio = btoa(String.fromCharCode(...uint8Array));
-          
-          // Send to OpenAI
-          wsRef.current.send(JSON.stringify({
-            type: 'input_audio_buffer.append',
-            audio: base64Audio
-          }));
-        }
-      };
-      
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-      
-      setRealtimeState(prev => ({ ...prev, isRecording: true }));
-
-    } catch (error) {
-      console.error('Failed to start recording:', error);
-    }
+  const extractOnboardingDataFromConversation = async (): Promise<OnboardingData> => {
+    // This would use AI to analyze the conversation and extract structured data
+    // For now, return a sample structure
+    return {
+      interests: ['Technology & AI', 'Business & Startups'],
+      contentFormats: ['podcast'],
+      dailyTime: 15,
+      podcastStyle: 'conversational',
+      preferredSpeed: 1.5,
+      personalityTraits: ['curious', 'analytical'],
+      communicationStyle: 'Casual & Conversational',
+      learningGoals: ['Stay current with industry trends', 'Develop specific skills'],
+      informationPreferences: ['Quick daily updates', 'Expert interviews']
+    };
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-      setRealtimeState(prev => ({ ...prev, isRecording: false }));
-    }
+  const handleManualStepChange = (key: keyof OnboardingData, value: string | number | string[]) => {
+    setOnboardingData(prev => ({ ...prev, [key]: value }));
   };
 
-  const toggleRecording = () => {
-    if (realtimeState.isRecording) {
-      stopRecording();
+  const nextManualStep = () => {
+    if (currentStep < manualSteps.length - 1) {
+      setCurrentStep(currentStep + 1);
     } else {
-      startRecording();
+      completeManualOnboarding();
     }
   };
 
-  const completeOnboarding = async () => {
+  const prevManualStep = () => {
+    if (currentStep > 0) {
+      setCurrentStep(currentStep - 1);
+    }
+  };
+
+  const completeManualOnboarding = async () => {
+    setMode('processing');
+    await generateContent(onboardingData);
+  };
+
+  const generateContent = async (data: OnboardingData) => {
+    
     try {
-      const response = await fetch('/api/realtime-onboarding', {
+      console.log('🚀 Starting content generation...');
+      console.log('📝 Onboarding data:', data);
+      
+      // Save onboarding data to database via preferences API
+      const saveResponse = await fetch('/api/preferences', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          action: 'generate_report',
-          sessionId: realtimeState.sessionId
-        })
+          interests: data.interests,
+          contentFormat: data.contentFormats.join(','), // Convert array to string for existing API
+          dailyTime: data.dailyTime,
+          podcastStyle: data.communicationStyle, // Map to existing field
+          preferredSpeed: data.preferredSpeed,
+          mantra: `Learning Goals: ${data.learningGoals.join(', ')}. Info Preferences: ${data.informationPreferences.join(', ')}`
+        }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        setRealtimeState(prev => ({ 
-          ...prev, 
-          report: data.report,
-          conversationState: 'completed'
-        }));
-
-        // Save preferences
-        await savePreferences(data.report.userProfile);
+      if (!saveResponse.ok) {
+        throw new Error('Failed to save onboarding data');
       }
-    } catch (error) {
-      console.error('Failed to complete onboarding:', error);
-    }
-  };
 
-  const savePreferences = async (userProfile: {
-    interests: string[];
-    contentFormat: string;
-    dailyTime: number;
-    podcastStyle: string;
-    preferredSpeed: number;
-    profileSummary?: string;
-  }) => {
-    try {
-      const response = await fetch('/api/preferences', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          interests: userProfile.interests || [],
-          contentFormat: userProfile.contentFormat || 'podcast',
-          dailyTime: userProfile.dailyTime || 5,
-          podcastStyle: userProfile.podcastStyle || 'conversational',
-          preferredSpeed: userProfile.preferredSpeed || 1.5,
-          mantra: userProfile.profileSummary || ''
-        })
+      console.log('✅ Onboarding data saved to database');
+      
+      // Also save to localStorage for dashboard to access during generation
+      localStorage.setItem('onboardingComplete', 'true');
+      localStorage.setItem('onboardingData', JSON.stringify(data));
+      localStorage.setItem('contentGenerationStatus', 'in-progress');
+      
+      // Start content generation in background
+      const generationPromise = generateContentInBackground(data);
+      
+      // Redirect to dashboard immediately
+      console.log('🔄 Redirecting to dashboard...');
+      router.push('/dashboard');
+      
+      // Handle content generation in background
+      generationPromise.then((content) => {
+        console.log('✅ Content generation completed!', content);
+        localStorage.setItem('generatedContent', JSON.stringify(content));
+        localStorage.setItem('contentGenerationStatus', 'complete');
+        
+        // Trigger a custom event to notify the dashboard
+        window.dispatchEvent(new CustomEvent('contentGenerationComplete'));
+      }).catch((error) => {
+        console.error('❌ Background content generation failed:', error);
+        localStorage.setItem('contentGenerationStatus', 'error');
+        
+        // Trigger a custom event to notify the dashboard
+        window.dispatchEvent(new CustomEvent('contentGenerationError'));
       });
-
-      if (response.ok) {
-        setTimeout(() => router.push('/dashboard'), 2000);
-      }
+      
     } catch (error) {
-      console.error('Failed to save preferences:', error);
+      console.error('Error generating content:', error);
+      localStorage.setItem('contentGenerationStatus', 'error');
+      
+      // Show error message to user
+      alert('Failed to save your preferences. Please try again.');
     }
   };
 
-  // Show loading state while checking authentication
+  const generateContentInBackground = async (data: OnboardingData): Promise<GeneratedContent> => {
+    console.log('⏱️ Starting 3-second content generation simulation...');
+    
+    // For demo purposes, simulate content generation with delay
+    await new Promise(resolve => setTimeout(resolve, 3000)); // 3 second delay
+    
+    console.log('🎯 Generating demo content...');
+    
+    const demoContent = {
+      podcast: {
+        title: `${data.interests.slice(0, 2).join(' & ')} Weekly: Your Personalized Update`,
+        description: `A ${data.dailyTime}-minute deep dive into the latest developments in ${data.interests.slice(0, 2).join(' and ')}, tailored specifically for your ${data.communicationStyle.toLowerCase()} preference.`,
+        script: `Welcome to your personalized podcast! Today we're covering the latest developments in ${data.interests.join(', ')} and how they're reshaping the landscape. 
+
+In this episode, we'll explore the cutting-edge innovations that are transforming ${data.interests[0]}, dive deep into the implications for ${data.interests[1] || 'the industry'}, and provide you with actionable insights you can apply immediately.
+
+Our research team has analyzed over 200 sources this week to bring you the most relevant and impactful stories. Whether you're a ${data.communicationStyle.toLowerCase()} professional or someone looking to stay ahead of the curve, this episode is designed specifically for your learning style.
+
+Key topics we'll cover:
+• Latest breakthrough in ${data.interests[0]}
+• Market analysis and trend predictions
+• Expert insights from industry leaders
+• Practical applications for your ${data.learningGoals.join(' and ')} goals
+
+Let's dive right in...`,
+        audioUrl: undefined
+      },
+      richTextReport: {
+        title: `Comprehensive Analysis: ${data.interests[0]} Trends Report`,
+        content: `# Executive Summary
+
+This comprehensive report analyzes the current state and emerging trends in ${data.interests[0]}, providing actionable insights for professionals and enthusiasts.
+
+## Key Findings
+
+### Market Overview
+The ${data.interests[0]} sector has experienced significant growth over the past quarter, with key developments in:
+
+- **Innovation Acceleration**: New technologies are emerging at an unprecedented pace
+- **Market Consolidation**: Major players are forming strategic partnerships
+- **Consumer Adoption**: End-user engagement has increased by 300% year-over-year
+
+### Trend Analysis
+
+#### 1. Emerging Technologies
+Recent breakthroughs in ${data.interests[0]} are reshaping the competitive landscape. Key innovations include:
+
+- Advanced AI integration capabilities
+- Enhanced user experience frameworks
+- Scalable infrastructure solutions
+
+#### 2. Market Dynamics
+The market is experiencing:
+- Increased investment from venture capital firms
+- Growing demand from enterprise customers
+- Expansion into international markets
+
+#### 3. Future Outlook
+Based on our analysis, we predict:
+- Continued growth in the next 12-18 months
+- Consolidation of smaller players
+- Emergence of new use cases and applications
+
+## Actionable Recommendations
+
+1. **Stay Informed**: Monitor key industry publications and thought leaders
+2. **Invest in Learning**: Develop skills in emerging technologies
+3. **Network Actively**: Attend industry conferences and events
+4. **Experiment**: Test new tools and platforms in your projects
+
+## Conclusion
+
+The ${data.interests[0]} landscape is evolving rapidly. Organizations and individuals who adapt quickly will be best positioned for success.
+
+---
+*Report generated based on ${data.interests.join(', ')} interests and ${data.communicationStyle.toLowerCase()} communication preferences.*`,
+        url: `/reports/demo-${Date.now()}`
+      },
+      tikTokScript: {
+        title: `60-Second ${data.interests[0]} Breakthrough!`,
+        transcript: `Scene 1: Hook - "You won't believe what just happened in ${data.interests[0]}!" 
+Scene 2: Setup the problem - "Most people are still using outdated approaches..."
+Scene 3: Reveal the breakthrough - "But here's what industry leaders just discovered..."
+Scene 4: Show the impact - "This changes everything because..."
+Scene 5: Call to action - "Here's what you need to do next..."
+Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
+        scenes: [
+          { 
+            text: `🚨 BREAKING: The biggest ${data.interests[0]} breakthrough of 2025 just dropped!`, 
+            duration: 10, 
+            emotion: 'excited' 
+          },
+          { 
+            text: `While everyone's focused on the obvious, smart players are already moving on this...`, 
+            duration: 10, 
+            emotion: 'mysterious' 
+          },
+          { 
+            text: `The data shows something incredible that most people are missing...`, 
+            duration: 10, 
+            emotion: 'analytical' 
+          },
+          { 
+            text: `But here's the real game-changer that will transform how we think about ${data.interests[0]}...`, 
+            duration: 10, 
+            emotion: 'dramatic' 
+          },
+          { 
+            text: `This is what you need to do RIGHT NOW to stay ahead of the curve...`, 
+            duration: 10, 
+            emotion: 'urgent' 
+          },
+          { 
+            text: `Follow @zeronoise for daily ${data.interests[0]} insights and trends!`, 
+            duration: 10, 
+            emotion: 'friendly' 
+          }
+        ]
+      }
+    };
+
+    console.log('🎉 Demo content generated successfully!');
+    return demoContent;
+  };
+
+  const addCustomInterest = () => {
+    if (customInterest.trim() && !onboardingData.interests.includes(customInterest.trim())) {
+      handleManualStepChange('interests', [...onboardingData.interests, customInterest.trim()]);
+      setCustomInterest('');
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      addCustomInterest();
+    }
+  };
+
   if (isCheckingAuth) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-indigo-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
-            <div className="w-8 h-8 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          </div>
-          <p className="text-gray-600">Loading...</p>
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-white" />
+          <p className="text-white">Setting up your experience...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-indigo-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800">
       <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
-          {/* User Header */}
-          <div className="flex items-center space-x-3 mb-8">
-            <div className="w-10 h-10 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
-              <User className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Realtime Voice Chat</p>
-              <p className="text-sm text-gray-600">{user?.email}</p>
-            </div>
-          </div>
+        <AnimatePresence mode="wait">
+          {/* Choice Screen */}
+          {mode === 'choice' && (
+            <motion.div
+              key="choice"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-4xl mx-auto text-center"
+            >
+              <div className="mb-12">
+                <h1 className="text-5xl font-bold text-white mb-6">
+                  Welcome to Zero Noise
+                </h1>
+                <p className="text-xl text-gray-300 mb-8">
+                  Let's personalize your content experience. Choose how you'd like to get started:
+                </p>
+              </div>
 
-          {/* Connection Status */}
-          <div className="mb-6">
-            <div className="flex items-center space-x-2 mb-2">
-              <div className={`w-3 h-3 rounded-full ${
-                realtimeState.connectionStatus === 'connected' ? 'bg-green-500 animate-pulse' :
-                realtimeState.connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
-                realtimeState.connectionStatus === 'error' ? 'bg-red-500' :
-                'bg-gray-400'
-              }`}></div>
-              <span className="text-sm font-medium text-gray-700">
-                {realtimeState.connectionStatus === 'connected' && '🟢 Connected to Alex'}
-                {realtimeState.connectionStatus === 'connecting' && '🟡 Connecting...'}
-                {realtimeState.connectionStatus === 'error' && '🔴 Connection Error'}
-                {realtimeState.connectionStatus === 'disconnected' && '⚫ Disconnected'}
-              </span>
-            </div>
-            
-            {/* Progress */}
-            <div className="flex justify-between text-sm text-gray-500 mb-2">
-              <span>Question {realtimeState.questionIndex + 1} of {realtimeState.totalQuestions}</span>
-              <span>{Math.round(((realtimeState.questionIndex + 1) / realtimeState.totalQuestions) * 100)}% complete</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div 
-                className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${((realtimeState.questionIndex + 1) / realtimeState.totalQuestions) * 100}%` }}
-              />
-            </div>
-          </div>
-
-          {/* Main Content */}
-          <div className="bg-white rounded-2xl shadow-lg p-8">
-            {realtimeState.conversationState !== 'completed' ? (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-              >
-                {/* Conversation Status */}
-                <div className="text-center mb-8">
-                  <div className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-4 ${
-                    realtimeState.conversationState === 'speaking' 
-                      ? 'bg-gradient-to-r from-green-500 to-green-600 animate-pulse' 
-                      : realtimeState.conversationState === 'listening'
-                      ? 'bg-gradient-to-r from-purple-500 to-pink-500 animate-pulse'
-                      : realtimeState.conversationState === 'processing'
-                      ? 'bg-gradient-to-r from-blue-500 to-blue-600'
-                      : 'bg-gradient-to-r from-gray-400 to-gray-500'
-                  }`}>
-                    {realtimeState.conversationState === 'speaking' ? (
-                      <Mic className="w-12 h-12 text-white" />
-                    ) : realtimeState.conversationState === 'listening' ? (
-                      <Volume2 className="w-12 h-12 text-white" />
-                    ) : realtimeState.conversationState === 'processing' ? (
-                      <Loader2 className="w-12 h-12 text-white animate-spin" />
-                    ) : (
-                      <User className="w-12 h-12 text-white" />
-                    )}
+              <div className="grid md:grid-cols-2 gap-8 mb-8">
+                {/* Realtime Option */}
+                <motion.div
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 cursor-pointer"
+                  onClick={startRealtimeOnboarding}
+                >
+                  <div className="mb-6">
+                    <div className="w-16 h-16 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <MessageSquare className="w-8 h-8 text-white" />
+                    </div>
+                    <h3 className="text-2xl font-semibold text-white mb-2">
+                      Chat with Sam
+                    </h3>
+                    <p className="text-gray-300">
+                      Have a natural conversation with our AI assistant to personalize your experience
+                    </p>
                   </div>
                   
-                  <h2 className="text-2xl font-bold text-gray-900 mb-4">
-                    {realtimeState.conversationState === 'speaking' && 'You&apos;re speaking...'}
-                    {realtimeState.conversationState === 'listening' && 'Alex is speaking...'}
-                    {realtimeState.conversationState === 'processing' && 'Processing...'}
-                    {realtimeState.conversationState === 'initializing' && 'Connecting to Alex...'}
-                  </h2>
-                </div>
+                  <div className="space-y-3 text-left">
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">Natural conversation</span>
+                    </div>
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">Voice & text support</span>
+                    </div>
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">2-3 minutes</span>
+                    </div>
+                  </div>
 
-                {/* Realtime Controls */}
-                <div className="flex justify-center space-x-4 mb-8">
-                  <Button
-                    onClick={toggleRecording}
-                    disabled={!realtimeState.isConnected}
-                    className={`${
-                      realtimeState.isRecording 
-                        ? 'bg-red-600 hover:bg-red-700 text-white' 
-                        : 'bg-green-600 hover:bg-green-700 text-white'
-                    } border-2 border-current font-semibold px-8 py-4 flex items-center space-x-3 shadow-lg disabled:opacity-50 text-lg`}
-                  >
-                    {realtimeState.isRecording ? (
-                      <>
-                        <MicOff className="w-6 h-6" />
-                        <span>Stop Talking</span>
-                      </>
-                    ) : (
-                      <>
-                        <Mic className="w-6 h-6" />
-                        <span>Start Talking</span>
-                      </>
-                    )}
+                  <Button className="w-full mt-6 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600">
+                    Start Conversation
                   </Button>
+                </motion.div>
 
-                  {realtimeState.questionIndex >= 4 && (
-                    <Button
-                      onClick={completeOnboarding}
-                      className="bg-purple-600 hover:bg-purple-700 text-white border-2 border-purple-600 font-semibold px-6 py-4 flex items-center space-x-2 shadow-lg"
-                    >
-                      <span>Complete Onboarding</span>
-                    </Button>
-                  )}
+                {/* Manual Option */}
+                <motion.div
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 cursor-pointer"
+                  onClick={startManualOnboarding}
+                >
+                  <div className="mb-6">
+                    <div className="w-16 h-16 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <Edit3 className="w-8 h-8 text-white" />
+                    </div>
+                    <h3 className="text-2xl font-semibold text-white mb-2">
+                      Manual Setup
+                    </h3>
+                    <p className="text-gray-300">
+                      Fill out a quick form if you prefer not to speak right now
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-3 text-left">
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">Quick form fields</span>
+                    </div>
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">Multi-select options</span>
+                    </div>
+                    <div className="flex items-center text-green-400">
+                      <Check className="w-4 h-4 mr-2" />
+                      <span className="text-sm">1-2 minutes</span>
+                    </div>
+                  </div>
+
+                  <Button className="w-full mt-6 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600">
+                    Fill Form
+                  </Button>
+                </motion.div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Realtime Conversation */}
+          {mode === 'realtime' && (
+            <motion.div
+              key="realtime"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-3xl mx-auto"
+            >
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20">
+                <div className="text-center mb-8">
+                  <div className="w-20 h-20 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <User className="w-10 h-10 text-white" />
+                  </div>
+                  <h2 className="text-3xl font-bold text-white mb-2">Sam</h2>
+                  <p className="text-gray-300">Your AI Onboarding Assistant</p>
                 </div>
 
-                {/* Live Conversation Display */}
                 <div className="space-y-6">
-                  {/* Current Transcript */}
-                  {realtimeState.currentTranscript && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-green-50 border-2 border-green-200 rounded-lg p-4"
-                    >
-                      <h4 className="font-semibold text-green-800 mb-2">You&apos;re saying:</h4>
-                      <p className="text-green-700">&quot;{realtimeState.currentTranscript}&quot;</p>
-                    </motion.div>
-                  )}
+                  {/* Connection Status */}
+                  <div className="flex items-center justify-center space-x-2 text-sm">
+                    <div className={`w-2 h-2 rounded-full ${
+                      realtimeState.connectionStatus === 'connected' ? 'bg-green-500' :
+                      realtimeState.connectionStatus === 'connecting' ? 'bg-yellow-500' :
+                      'bg-red-500'
+                    }`} />
+                    <span className="text-gray-300">
+                      {realtimeState.connectionStatus === 'connected' ? 'Connected' :
+                       realtimeState.connectionStatus === 'connecting' ? 'Connecting...' :
+                       'Connection Error'}
+                    </span>
+                  </div>
 
-                  {/* Alex's Response */}
-                  {realtimeState.alexResponse && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="bg-purple-50 border-2 border-purple-200 rounded-lg p-4"
-                    >
-                      <h4 className="font-semibold text-purple-800 mb-2">Alex says:</h4>
-                      <p className="text-purple-700">&quot;{realtimeState.alexResponse}&quot;</p>
-                    </motion.div>
-                  )}
+                  {/* Conversation Area */}
+                  <div className="bg-black/20 rounded-xl p-6 min-h-[200px]">
+                    {realtimeState.samResponse && (
+                      <div className="mb-4">
+                        <div className="flex items-start space-x-3">
+                          <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
+                            <MessageSquare className="w-4 h-4 text-white" />
+                          </div>
+                          <div className="bg-white/10 rounded-lg p-3 max-w-[80%]">
+                            <p className="text-white">{realtimeState.samResponse}</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
-                  {/* Conversation Status */}
-                  <div className="bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-200 rounded-lg p-6">
-                    <div className="text-center">
-                      <p className="text-blue-800 font-semibold text-lg mb-2">
-                        🎙️ Real-time conversation with Alex
-                      </p>
-                      <p className="text-blue-700">
-                        {realtimeState.isConnected 
-                          ? "Speak naturally - Alex can hear you and respond in real-time!"
-                          : "Connecting to Alex..."
-                        }
-                      </p>
-                      {realtimeState.isSpeaking && (
-                        <p className="text-green-700 font-semibold mt-2">✓ Alex can hear you speaking...</p>
+                    {realtimeState.currentTranscript && (
+                      <div className="flex items-start space-x-3 justify-end">
+                        <div className="bg-blue-500/20 rounded-lg p-3 max-w-[80%]">
+                          <p className="text-white">{realtimeState.currentTranscript}</p>
+                        </div>
+                        <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
+                          <User className="w-4 h-4 text-white" />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Recording Controls */}
+                  <div className="flex items-center justify-center space-x-4">
+                    <Button
+                      variant={realtimeState.isRecording ? "destructive" : "default"}
+                      size="lg"
+                      className="rounded-full w-16 h-16"
+                      disabled={realtimeState.connectionStatus !== 'connected'}
+                    >
+                      {realtimeState.isRecording ? (
+                        <MicOff className="w-6 h-6" />
+                      ) : (
+                        <Mic className="w-6 h-6" />
                       )}
+                    </Button>
+                    
+                    <div className="text-center">
+                      <p className="text-white text-sm">
+                        {realtimeState.isRecording ? 'Listening...' : 'Tap to speak'}
+                      </p>
+                      <Progress 
+                        value={(realtimeState.questionIndex / realtimeState.totalQuestions) * 100} 
+                        className="w-32 mt-2"
+                      />
                     </div>
                   </div>
                 </div>
-              </motion.div>
-            ) : (
-              /* Completion Screen */
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.5 }}
-                className="text-center"
-              >
-                <div className="w-24 h-24 bg-gradient-to-r from-green-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
-                  <User className="w-12 h-12 text-white" />
-                </div>
-                
-                <h2 className="text-3xl font-bold text-gray-900 mb-4">
-                  Amazing conversation! 🎉
-                </h2>
-                
-                <p className="text-gray-600 mb-6 text-lg">
-                  Thank you for the wonderful real-time chat! I&apos;ve created your personalized profile 
-                  and your custom podcast experience is ready.
-                </p>
-                
-                {realtimeState.report && (
-                  <div className="bg-purple-50 border-2 border-purple-200 rounded-lg p-6 mb-6 text-left">
-                    <h3 className="font-semibold text-purple-800 mb-3">Your Profile Summary:</h3>
-                    <p className="text-purple-700 mb-4">{realtimeState.report.profileSummary}</p>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Manual Onboarding */}
+          {mode === 'manual' && (
+            <motion.div
+              key="manual"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-3xl mx-auto"
+            >
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20">
+                <div className="mb-8">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-3xl font-bold text-white">Setup Your Preferences</h2>
+                    <span className="text-gray-300">
+                      {currentStep + 1} of {manualSteps.length}
+                    </span>
                   </div>
-                )}
-                
-                <div className="flex items-center justify-center">
-                  <Loader2 className="w-5 h-5 animate-spin text-purple-500 mr-2" />
-                  <span className="text-gray-600">Redirecting to your dashboard...</span>
+                  <Progress value={((currentStep + 1) / manualSteps.length) * 100} className="mb-4" />
                 </div>
-              </motion.div>
-            )}
-          </div>
-        </div>
+
+                <div className="space-y-8">
+                  {/* Interests Step */}
+                  {currentStep === 0 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">What interests you?</h3>
+                      
+                      {/* Predefined Interest Options */}
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+                        {INTEREST_OPTIONS.map((interest) => (
+                          <button
+                            key={interest}
+                            onClick={() => {
+                              const newInterests = onboardingData.interests.includes(interest)
+                                ? onboardingData.interests.filter(i => i !== interest)
+                                : [...onboardingData.interests, interest];
+                              handleManualStepChange('interests', newInterests);
+                            }}
+                            className={`p-3 rounded-lg text-sm transition-all ${
+                              onboardingData.interests.includes(interest)
+                                ? 'bg-purple-500 text-white'
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            {interest}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Custom Interest Input */}
+                      <div className="border-t border-white/20 pt-6">
+                        <h4 className="text-lg font-medium text-white mb-3">Add your own interests:</h4>
+                        <div className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={customInterest}
+                            onChange={(e) => setCustomInterest(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder="Type an interest and press Enter..."
+                            className="flex-1 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-purple-500"
+                          />
+                          <button
+                            onClick={addCustomInterest}
+                            disabled={!customInterest.trim()}
+                            className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Add
+                          </button>
+                        </div>
+                        
+                        {/* Display Selected Interests */}
+                        {onboardingData.interests.length > 0 && (
+                          <div className="mt-4">
+                            <p className="text-sm text-gray-300 mb-2">Selected interests:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {onboardingData.interests.map((interest, index) => (
+                                <span
+                                  key={index}
+                                  className="px-3 py-1 bg-purple-500 text-white text-sm rounded-full flex items-center space-x-2"
+                                >
+                                  <span>{interest}</span>
+                                  <button
+                                    onClick={() => {
+                                      const newInterests = onboardingData.interests.filter(i => i !== interest);
+                                      handleManualStepChange('interests', newInterests);
+                                    }}
+                                    className="hover:bg-purple-600 rounded-full p-1"
+                                  >
+                                    ×
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Content Formats Step */}
+                  {currentStep === 1 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">Preferred content formats? (Select multiple)</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {CONTENT_FORMAT_OPTIONS.map((format) => (
+                          <button
+                            key={format.value}
+                            onClick={() => {
+                              const newFormats = onboardingData.contentFormats.includes(format.value)
+                                ? onboardingData.contentFormats.filter(f => f !== format.value)
+                                : [...onboardingData.contentFormats, format.value];
+                              handleManualStepChange('contentFormats', newFormats);
+                            }}
+                            className={`p-4 rounded-lg flex items-center space-x-3 transition-all ${
+                              onboardingData.contentFormats.includes(format.value)
+                                ? 'bg-purple-500 text-white'
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            <format.icon className="w-5 h-5" />
+                            <span>{format.label}</span>
+                            {onboardingData.contentFormats.includes(format.value) && (
+                              <Check className="w-4 h-4 ml-auto" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      
+                      {/* Display Selected Formats */}
+                      {onboardingData.contentFormats.length > 0 && (
+                        <div className="mt-4 p-4 bg-white/5 rounded-lg">
+                          <p className="text-sm text-gray-300 mb-2">You&apos;ll receive content in these formats:</p>
+                          <div className="flex flex-wrap gap-2">
+                            {onboardingData.contentFormats.map((format) => {
+                              const formatOption = CONTENT_FORMAT_OPTIONS.find(f => f.value === format);
+                              const IconComponent = formatOption?.icon;
+                              return (
+                                <span
+                                  key={format}
+                                  className="px-3 py-1 bg-purple-500 text-white text-sm rounded-full flex items-center space-x-1"
+                                >
+                                  {IconComponent && <IconComponent className="w-3 h-3" />}
+                                  <span>{formatOption?.label}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Time Preference Step */}
+                  {currentStep === 2 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">Daily time for content?</h3>
+                      <div className="space-y-4">
+                        <input
+                          type="range"
+                          min="5"
+                          max="60"
+                          step="5"
+                          value={onboardingData.dailyTime}
+                          onChange={(e) => handleManualStepChange('dailyTime', parseInt(e.target.value))}
+                          className="w-full"
+                        />
+                        <div className="text-center">
+                          <span className="text-2xl font-bold text-white">{onboardingData.dailyTime} minutes</span>
+                          <p className="text-gray-300">per day</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Communication Style Step */}
+                  {currentStep === 3 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">Communication style?</h3>
+                      <div className="space-y-3">
+                        {COMMUNICATION_STYLES.map((style) => (
+                          <button
+                            key={style}
+                            onClick={() => handleManualStepChange('communicationStyle', style)}
+                            className={`w-full p-3 rounded-lg text-left transition-all ${
+                              onboardingData.communicationStyle === style
+                                ? 'bg-purple-500 text-white'
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            {style}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Learning Goals Step */}
+                  {currentStep === 4 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">Learning goals?</h3>
+                      <div className="space-y-3">
+                        {LEARNING_GOALS.map((goal) => (
+                          <button
+                            key={goal}
+                            onClick={() => {
+                              const newGoals = onboardingData.learningGoals.includes(goal)
+                                ? onboardingData.learningGoals.filter(g => g !== goal)
+                                : [...onboardingData.learningGoals, goal];
+                              handleManualStepChange('learningGoals', newGoals);
+                            }}
+                            className={`w-full p-3 rounded-lg text-left transition-all ${
+                              onboardingData.learningGoals.includes(goal)
+                                ? 'bg-purple-500 text-white'
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>{goal}</span>
+                              {onboardingData.learningGoals.includes(goal) && (
+                                <Check className="w-4 h-4" />
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Information Preferences Step */}
+                  {currentStep === 5 && (
+                    <div>
+                      <h3 className="text-xl font-semibold text-white mb-4">How do you like to receive information?</h3>
+                      <div className="space-y-3">
+                        {INFORMATION_PREFERENCES.map((pref) => (
+                          <button
+                            key={pref}
+                            onClick={() => {
+                              const newPrefs = onboardingData.informationPreferences.includes(pref)
+                                ? onboardingData.informationPreferences.filter(p => p !== pref)
+                                : [...onboardingData.informationPreferences, pref];
+                              handleManualStepChange('informationPreferences', newPrefs);
+                            }}
+                            className={`w-full p-3 rounded-lg text-left transition-all ${
+                              onboardingData.informationPreferences.includes(pref)
+                                ? 'bg-purple-500 text-white'
+                                : 'bg-white/10 text-gray-300 hover:bg-white/20'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span>{pref}</span>
+                              {onboardingData.informationPreferences.includes(pref) && (
+                                <Check className="w-4 h-4" />
+                              )}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Navigation */}
+                <div className="flex justify-between mt-8">
+                  <Button
+                    variant="outline"
+                    onClick={prevManualStep}
+                    disabled={currentStep === 0}
+                    className="border-white/20 text-white hover:bg-white/10"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    onClick={nextManualStep}
+                    className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                    disabled={
+                      (currentStep === 0 && onboardingData.interests.length === 0) ||
+                      (currentStep === 1 && onboardingData.contentFormats.length === 0) ||
+                      (currentStep === 3 && !onboardingData.communicationStyle) ||
+                      (currentStep === 4 && onboardingData.learningGoals.length === 0) ||
+                      (currentStep === 5 && onboardingData.informationPreferences.length === 0)
+                    }
+                  >
+                    {currentStep === manualSteps.length - 1 ? 'Complete Setup' : 'Next'}
+                    <ChevronRight className="w-4 h-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Processing */}
+          {mode === 'processing' && (
+            <motion.div
+              key="processing"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-2xl mx-auto text-center"
+            >
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-12 border border-white/20">
+                <div className="mb-8">
+                  <div className="w-24 h-24 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <Loader2 className="w-12 h-12 text-white animate-spin" />
+                  </div>
+                  <h2 className="text-3xl font-bold text-white mb-4">
+                    Creating Your Personalized Content
+                  </h2>
+                  <p className="text-gray-300 text-lg">
+                    We&apos;re analyzing your preferences and generating custom content just for you...
+                  </p>
+                </div>
+
+                <div className="space-y-4 text-left">
+                  <div className="flex items-center space-x-3">
+                    <Check className="w-5 h-5 text-green-400" />
+                    <span className="text-white">Analyzing your interests and goals</span>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <Check className="w-5 h-5 text-green-400" />
+                    <span className="text-white">Searching for relevant recent content</span>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />
+                    <span className="text-white">Generating personalized podcast</span>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-5 h-5 border-2 border-gray-400 rounded border-dashed" />
+                    <span className="text-gray-400">Creating rich text report</span>
+                  </div>
+                  <div className="flex items-center space-x-3">
+                    <div className="w-5 h-5 border-2 border-gray-400 rounded border-dashed" />
+                    <span className="text-gray-400">Preparing TikTok script</span>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Complete */}
+          {mode === 'complete' && generatedContent && (
+            <motion.div
+              key="complete"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="max-w-4xl mx-auto"
+            >
+              <div className="text-center mb-8">
+                <h1 className="text-4xl font-bold text-white mb-4">
+                  Your Personalized Content is Ready!
+                </h1>
+                <p className="text-xl text-gray-300">
+                  Based on your preferences, we&apos;ve created custom content in multiple formats
+                </p>
+              </div>
+
+              <div className="grid md:grid-cols-3 gap-6 mb-8">
+                {/* Podcast Card */}
+                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+                      <Headphones className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">Podcast</h3>
+                      <p className="text-sm text-gray-300">Audio content</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-300 mb-4 text-sm">
+                    {generatedContent.podcast.description}
+                  </p>
+                  <div className="space-y-2">
+                    <Button className="w-full bg-gradient-to-r from-purple-500 to-pink-500">
+                      <Play className="w-4 h-4 mr-2" />
+                      Play Podcast
+                    </Button>
+                    {generatedContent.richTextReport && (
+                      <Button variant="outline" className="w-full border-white/20 text-white hover:bg-white/10">
+                        <ExternalLink className="w-4 h-4 mr-2" />
+                        View Report
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Report Card */}
+                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="w-12 h-12 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full flex items-center justify-center">
+                      <FileText className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">Rich Report</h3>
+                      <p className="text-sm text-gray-300">Detailed analysis</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-300 mb-4 text-sm">
+                    Comprehensive written report with links and references
+                  </p>
+                  <Button className="w-full bg-gradient-to-r from-blue-500 to-cyan-500">
+                    <FileText className="w-4 h-4 mr-2" />
+                    Read Report
+                  </Button>
+                </div>
+
+                {/* TikTok Script Card */}
+                <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="w-12 h-12 bg-gradient-to-r from-pink-500 to-orange-500 rounded-full flex items-center justify-center">
+                      <Video className="w-6 h-6 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-white">TikTok Script</h3>
+                      <p className="text-sm text-gray-300">Video content</p>
+                    </div>
+                  </div>
+                  <p className="text-gray-300 mb-4 text-sm">
+                    Short-form video script optimized for social media
+                  </p>
+                  <Button className="w-full bg-gradient-to-r from-pink-500 to-orange-500">
+                    <Video className="w-4 h-4 mr-2" />
+                    View Script
+                  </Button>
+                </div>
+              </div>
+
+              <div className="text-center">
+                <Button
+                  onClick={() => router.push('/dashboard')}
+                  size="lg"
+                  className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+                >
+                  Go to Dashboard
+                  <ChevronRight className="w-4 h-4 ml-2" />
+                </Button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
