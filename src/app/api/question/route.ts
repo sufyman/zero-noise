@@ -35,7 +35,7 @@ Example format:
 ]`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o-mini-realtime-preview-2024-12-17",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Question from listener: "${question}"` }

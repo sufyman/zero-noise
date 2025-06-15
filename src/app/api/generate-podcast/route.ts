@@ -121,7 +121,7 @@ Topics to cover: ${topics.length > 0 ? topics.join(', ') : 'Latest developments 
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o-mini-realtime-preview-2024-12-17",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Generate a ${userProfile.dailyTime}-minute personalized podcast episode for today. Make it feel like Alex and Jordan are speaking directly to this user based on their profile.` }

@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
-import { useRouter } from "next/navigation";
 
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -20,13 +19,10 @@ import {
   CheckCircle,
   XCircle,
   Eye,
-  Download,
   Mic,
-  MicOff,
-  Volume2,
-  VolumeX,
-  SkipForward,
-  MessageSquare
+  Send,
+  MessageSquare,
+  X
 } from "lucide-react";
 
 // Speech Recognition types
@@ -139,11 +135,19 @@ interface PodcastState {
   isListeningForQuestion: boolean;
   userQuestion: string;
   isProcessingQuestion: boolean;
+  playbackSpeed: number;
+  isPaused: boolean;
+  showTextInput: boolean;
+  textQuestion: string;
+  showQuestionModal: boolean;
+  wasPlayingBeforeModal: boolean;
+  aiResponse: string;
+  showAiResponse: boolean;
+  currentAiAudio: HTMLAudioElement | null;
 }
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
+  const [, setUser] = useState<User | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [onboardingData, setOnboardingData] = useState<OnboardingData | null>(null);
   const [contentCards, setContentCards] = useState<ContentCard[]>([]);
@@ -161,11 +165,22 @@ export default function DashboardPage() {
     currentAudio: null,
     isListeningForQuestion: false,
     userQuestion: '',
-    isProcessingQuestion: false
+    isProcessingQuestion: false,
+    playbackSpeed: 1.0,
+    isPaused: false,
+    showTextInput: false,
+    textQuestion: '',
+    showQuestionModal: false,
+    wasPlayingBeforeModal: false,
+    aiResponse: '',
+    showAiResponse: false,
+    currentAiAudio: null
   });
 
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const audioQueueRef = useRef<HTMLAudioElement[]>([]);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const aiAudioRef = useRef<HTMLAudioElement[]>([]);
 
   // Voice configurations for ElevenLabs
   const voices = {
@@ -324,6 +339,92 @@ export default function DashboardPage() {
     return () => clearInterval(pollInterval);
   }, []);
 
+  // Handle user question interruption
+  const handleUserQuestion = useCallback(async (question: string) => {
+    if (!question.trim()) return;
+    
+    // Pause current audio immediately
+    if (currentAudioRef.current && podcastState.isPlaying) {
+      currentAudioRef.current.pause();
+    }
+    
+    setPodcastState(prev => ({ 
+      ...prev, 
+      isProcessingQuestion: true,
+      isPlaying: false,
+      isPaused: true
+    }));
+
+    try {
+      // Generate AI response to user question using OpenAI
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: question,
+          context: `Current podcast context: ${podcastState.segments[podcastState.currentSegmentIndex]?.text || ''}. User interests: ${onboardingData?.interests.join(', ') || ''}`,
+          systemPrompt: `You are Alex and Jordan, the podcast hosts. The user just interrupted with a question. Respond as both hosts would - Alex with practical insights, Jordan with thoughtful analysis. Keep responses conversational and under 100 words each.`
+        }),
+      });
+
+      if (response.ok) {
+        const responseData = await response.json();
+        
+        // Create response segments
+        const responseSegments: PodcastSegment[] = [
+          {
+            speaker: 'Alex',
+            text: `Great question! ${responseData.alexResponse || responseData.response || 'Let me think about that...'}`,
+            timestamp: 0
+          },
+          {
+            speaker: 'Jordan', 
+            text: responseData.jordanResponse || `I'd add to what Alex said - ${responseData.response || 'that\'s a really interesting point.'}`,
+            timestamp: 15
+          }
+        ];
+
+        // Generate and play response audio
+        for (const segment of responseSegments) {
+          const responseAudio = await generateSegmentAudio(segment);
+          await new Promise<void>((resolve) => {
+            responseAudio.onended = () => resolve();
+            responseAudio.play();
+          });
+        }
+
+        // Resume original podcast
+        if (currentAudioRef.current) {
+          setPodcastState(prev => ({ 
+            ...prev, 
+            isPlaying: true,
+            isPaused: false
+          }));
+          currentAudioRef.current.play();
+        }
+      }
+    } catch (error) {
+      console.error('Error handling user question:', error);
+      // Resume podcast even if question handling fails
+      if (currentAudioRef.current) {
+        setPodcastState(prev => ({ 
+          ...prev, 
+          isPlaying: true,
+          isPaused: false
+        }));
+        currentAudioRef.current.play();
+      }
+    } finally {
+      setPodcastState(prev => ({ 
+        ...prev, 
+        isProcessingQuestion: false,
+        userQuestion: ''
+      }));
+    }
+  }, [podcastState.isPlaying, podcastState.segments, podcastState.currentSegmentIndex, onboardingData?.interests]);
+
   // Initialize speech recognition
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -347,7 +448,38 @@ export default function DashboardPage() {
 
         recognitionRef.current.onerror = (event: SpeechRecognitionErrorEvent) => {
           console.error('Speech recognition error:', event.error);
-          setPodcastState(prev => ({ ...prev, isListeningForQuestion: false }));
+          
+          let errorMessage = '';
+          switch (event.error) {
+            case 'network':
+              errorMessage = 'Network error. Please check your internet connection and try again.';
+              break;
+            case 'not-allowed':
+              errorMessage = 'Microphone access denied. Please enable microphone permissions.';
+              break;
+            case 'no-speech':
+              errorMessage = 'No speech detected. Please try speaking again.';
+              break;
+            case 'audio-capture':
+              errorMessage = 'Audio capture failed. Please check your microphone.';
+              break;
+            case 'service-not-allowed':
+              errorMessage = 'Speech recognition service not allowed. Please try again.';
+              break;
+            default:
+              errorMessage = `Speech recognition error: ${event.error}. Please try again.`;
+          }
+          
+          setPodcastState(prev => ({ 
+            ...prev, 
+            isListeningForQuestion: false,
+            userQuestion: errorMessage
+          }));
+          
+          // Clear the error message after 4 seconds
+          setTimeout(() => {
+            setPodcastState(prev => ({ ...prev, userQuestion: '' }));
+          }, 4000);
         };
 
         recognitionRef.current.onend = () => {
@@ -355,7 +487,7 @@ export default function DashboardPage() {
         };
       }
     }
-  }, []);
+  }, [handleUserQuestion]);
 
   // Parse podcast script into segments with speakers
   const parsePodcastScript = (script: string): PodcastSegment[] => {
@@ -418,7 +550,8 @@ export default function DashboardPage() {
         },
         body: JSON.stringify({
           text: segment.text,
-          voiceId: voiceId
+          voiceId: voiceId,
+          speed: podcastState.playbackSpeed
         }),
       });
 
@@ -429,6 +562,7 @@ export default function DashboardPage() {
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
+      audio.playbackRate = podcastState.playbackSpeed;
       
       return new Promise((resolve, reject) => {
         audio.onloadeddata = () => resolve(audio);
@@ -447,22 +581,23 @@ export default function DashboardPage() {
     setPodcastState(prev => ({ 
       ...prev, 
       isGeneratingAudio: true, 
-      currentSegmentIndex: 0 
+      currentSegmentIndex: 0,
+      isPaused: false
     }));
 
     try {
-      // Generate audio for first few segments
-      const initialSegments = podcastState.segments.slice(0, 3);
-      const audioPromises = initialSegments.map(segment => generateSegmentAudio(segment));
-      const audioElements = await Promise.all(audioPromises);
+      // Generate audio for first segment
+      const firstSegment = podcastState.segments[0];
+      const firstAudio = await generateSegmentAudio(firstSegment);
       
-      audioQueueRef.current = audioElements;
+      audioQueueRef.current = [firstAudio];
+      currentAudioRef.current = firstAudio;
       
       setPodcastState(prev => ({ 
         ...prev, 
         isGeneratingAudio: false,
         isPlaying: true,
-        currentAudio: audioElements[0]
+        currentAudio: firstAudio
       }));
 
       // Start playing first segment
@@ -482,9 +617,12 @@ export default function DashboardPage() {
     const audio = audioQueueRef.current[segmentIndex];
     if (!audio) return;
 
+    currentAudioRef.current = audio;
+    audio.playbackRate = podcastState.playbackSpeed;
+
     audio.onended = () => {
       const nextIndex = segmentIndex + 1;
-      if (nextIndex < podcastState.segments.length) {
+      if (nextIndex < podcastState.segments.length && !podcastState.isPaused) {
         setPodcastState(prev => ({ 
           ...prev, 
           currentSegmentIndex: nextIndex 
@@ -492,10 +630,14 @@ export default function DashboardPage() {
         
         // Generate next segment audio if not already generated
         if (nextIndex >= audioQueueRef.current.length) {
+          setPodcastState(prev => ({ ...prev, isGeneratingAudio: true }));
           generateSegmentAudio(podcastState.segments[nextIndex])
             .then(nextAudio => {
               audioQueueRef.current.push(nextAudio);
-              playCurrentSegment(nextIndex);
+              setPodcastState(prev => ({ ...prev, isGeneratingAudio: false }));
+              if (!podcastState.isPaused) {
+                playCurrentSegment(nextIndex);
+              }
             })
             .catch(console.error);
         } else {
@@ -506,88 +648,62 @@ export default function DashboardPage() {
       }
     };
 
-    audio.play();
+    audio.play().catch(console.error);
   };
 
-  // Handle user question interruption
-  const handleUserQuestion = async (question: string) => {
-    if (!question.trim()) return;
-    
-    setPodcastState(prev => ({ 
-      ...prev, 
-      isProcessingQuestion: true,
-      isPlaying: false 
-    }));
-
-    // Pause current audio
-    if (podcastState.currentAudio) {
-      podcastState.currentAudio.pause();
-    }
-
-    try {
-      // Generate AI response to user question
-      const response = await fetch('/api/generate-podcast', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userProfile: onboardingData,
-          userQuestion: question,
-          currentContext: podcastState.segments[podcastState.currentSegmentIndex]?.text || '',
-          contentType: 'question_response'
-        }),
-      });
-
-      if (response.ok) {
-        const responseData = await response.json();
-        
-        // Create response segments
-        const responseSegments: PodcastSegment[] = [
-          {
-            speaker: 'Alex',
-            text: `Great question! ${responseData.alexResponse || 'Let me think about that...'}`,
-            timestamp: 0
-          },
-          {
-            speaker: 'Jordan', 
-            text: responseData.jordanResponse || 'I agree with Alex on this one.',
-            timestamp: 15
-          }
-        ];
-
-        // Generate audio for responses
-        const responseAudio = await Promise.all(
-          responseSegments.map(segment => generateSegmentAudio(segment))
-        );
-
-        // Play responses
-        for (let i = 0; i < responseAudio.length; i++) {
-          await new Promise<void>((resolve) => {
-            responseAudio[i].onended = () => resolve();
-            responseAudio[i].play();
-          });
-        }
+  // Pause/Resume podcast
+  const togglePodcastPlayback = () => {
+    if (currentAudioRef.current) {
+      if (podcastState.isPlaying && !podcastState.isPaused) {
+        currentAudioRef.current.pause();
+        setPodcastState(prev => ({ ...prev, isPaused: true }));
+      } else if (podcastState.isPaused) {
+        currentAudioRef.current.play();
+        setPodcastState(prev => ({ ...prev, isPaused: false }));
       }
-    } catch (error) {
-      console.error('Error handling user question:', error);
-    } finally {
-      setPodcastState(prev => ({ 
-        ...prev, 
-        isProcessingQuestion: false,
-        userQuestion: ''
-      }));
+    }
+  };
+
+  // Change playback speed
+  const changePlaybackSpeed = (speed: number) => {
+    setPodcastState(prev => ({ ...prev, playbackSpeed: speed }));
+    if (currentAudioRef.current) {
+      currentAudioRef.current.playbackRate = speed;
     }
   };
 
   // Start listening for user question
-  const startListening = () => {
-    if (recognitionRef.current) {
+  const startListening = async () => {
+    if (!recognitionRef.current) {
+      console.error('Speech recognition not available');
+      return;
+    }
+
+    try {
+      // Request microphone permission first
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop()); // Stop the stream immediately, we just needed permission
+      
       setPodcastState(prev => ({ 
         ...prev, 
         isListeningForQuestion: true 
       }));
+      
       recognitionRef.current.start();
+    } catch (error) {
+      console.error('Microphone permission denied or not available:', error);
+      
+      // Show user-friendly error message
+      setPodcastState(prev => ({ 
+        ...prev, 
+        isListeningForQuestion: false,
+        userQuestion: 'Microphone access denied. Please enable microphone permissions and try again.'
+      }));
+      
+      // Clear the error message after 3 seconds
+      setTimeout(() => {
+        setPodcastState(prev => ({ ...prev, userQuestion: '' }));
+      }, 3000);
     }
   };
 
@@ -602,23 +718,6 @@ export default function DashboardPage() {
     if (podcastState.currentAudio) {
       podcastState.currentAudio.pause();
       setPodcastState(prev => ({ ...prev, isPlaying: false }));
-    }
-  };
-
-  const handlePlayPodcast = () => {
-    if (!podcastState.currentAudio && generatedContent?.podcast.audioUrl) {
-      const audio = new Audio(generatedContent.podcast.audioUrl);
-      audio.onended = () => setPodcastState(prev => ({ ...prev, isPlaying: false }));
-      setPodcastState(prev => ({ ...prev, currentAudio: audio, isPlaying: true }));
-      audio.play();
-    } else if (podcastState.currentAudio) {
-      if (podcastState.isPlaying) {
-        podcastState.currentAudio.pause();
-        setPodcastState(prev => ({ ...prev, isPlaying: false }));
-      } else {
-        podcastState.currentAudio.play();
-        setPodcastState(prev => ({ ...prev, isPlaying: true }));
-      }
     }
   };
 
@@ -651,6 +750,168 @@ export default function DashboardPage() {
         return 'Generation failed';
       default:
         return 'Generating...';
+    }
+  };
+
+  // Handle text input change
+  const handleTextInputChange = (value: string) => {
+    setPodcastState(prev => ({ ...prev, textQuestion: value }));
+  };
+
+  // Open question modal
+  const openQuestionModal = () => {
+    // Pause podcast if playing
+    const wasPlaying = podcastState.isPlaying && !podcastState.isPaused;
+    if (wasPlaying && currentAudioRef.current) {
+      currentAudioRef.current.pause();
+    }
+    
+    setPodcastState(prev => ({ 
+      ...prev, 
+      showQuestionModal: true,
+      wasPlayingBeforeModal: wasPlaying,
+      isPaused: wasPlaying,
+      showTextInput: false,
+      textQuestion: '',
+      userQuestion: '',
+      isListeningForQuestion: false
+    }));
+  };
+
+  // Close question modal
+  const closeQuestionModal = () => {
+    // Stop any ongoing speech recognition
+    if (recognitionRef.current && podcastState.isListeningForQuestion) {
+      recognitionRef.current.stop();
+    }
+    
+    // Stop all AI response audio
+    aiAudioRef.current.forEach(audio => {
+      if (!audio.paused) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+    });
+    aiAudioRef.current = [];
+    
+    // Stop current AI audio if playing
+    if (podcastState.currentAiAudio && !podcastState.currentAiAudio.paused) {
+      podcastState.currentAiAudio.pause();
+      podcastState.currentAiAudio.currentTime = 0;
+    }
+    
+    // Resume podcast if it was playing before modal
+    if (podcastState.wasPlayingBeforeModal && currentAudioRef.current) {
+      currentAudioRef.current.play();
+      setPodcastState(prev => ({ 
+        ...prev, 
+        isPaused: false,
+        isPlaying: true
+      }));
+    }
+    
+    setPodcastState(prev => ({ 
+      ...prev, 
+      showQuestionModal: false,
+      wasPlayingBeforeModal: false,
+      showTextInput: false,
+      textQuestion: '',
+      userQuestion: '',
+      isListeningForQuestion: false,
+      isProcessingQuestion: false,
+      aiResponse: '',
+      showAiResponse: false,
+      currentAiAudio: null
+    }));
+  };
+
+  // Handle question submission from modal
+  const handleModalQuestion = async (question: string) => {
+    if (!question.trim()) return;
+    
+    // Keep modal open but clear input and show processing state
+    setPodcastState(prev => ({ 
+      ...prev, 
+      isProcessingQuestion: true,
+      showTextInput: false,
+      textQuestion: '',
+      userQuestion: question,
+      isListeningForQuestion: false,
+      aiResponse: '',
+      showAiResponse: false
+    }));
+    
+    try {
+      // Generate AI response to user question using OpenAI
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: question,
+          context: `Current podcast context: ${podcastState.segments[podcastState.currentSegmentIndex]?.text || ''}. User interests: ${onboardingData?.interests.join(', ') || ''}`,
+          systemPrompt: `You are Alex and Jordan, the podcast hosts. The user just interrupted with a question. Respond as both hosts would - Alex with practical insights, Jordan with thoughtful analysis. Keep responses conversational and under 100 words each.`
+        }),
+      });
+
+      if (response.ok) {
+        const responseData = await response.json();
+        
+        // Show AI response in modal
+        const fullResponse = `Alex: ${responseData.alexResponse || responseData.response || 'Let me think about that...'}\n\nJordan: ${responseData.jordanResponse || `I'd add to what Alex said - ${responseData.response || 'that\'s a really interesting point.'}`}`;
+        
+        setPodcastState(prev => ({ 
+          ...prev, 
+          aiResponse: fullResponse,
+          showAiResponse: true
+        }));
+        
+        // Create response segments
+        const responseSegments: PodcastSegment[] = [
+          {
+            speaker: 'Alex',
+            text: `Great question! ${responseData.alexResponse || responseData.response || 'Let me think about that...'}`,
+            timestamp: 0
+          },
+          {
+            speaker: 'Jordan', 
+            text: responseData.jordanResponse || `I'd add to what Alex said - ${responseData.response || 'that\'s a really interesting point.'}`,
+            timestamp: 15
+          }
+        ];
+
+        // Generate and play response audio
+        for (const segment of responseSegments) {
+          const responseAudio = await generateSegmentAudio(segment);
+          
+          // Track AI audio for cleanup
+          aiAudioRef.current.push(responseAudio);
+          setPodcastState(prev => ({ ...prev, currentAiAudio: responseAudio }));
+          
+          await new Promise<void>((resolve) => {
+            responseAudio.onended = () => {
+              setPodcastState(prev => ({ ...prev, currentAiAudio: null }));
+              resolve();
+            };
+            responseAudio.play();
+          });
+        }
+
+        // Mark processing as complete
+        setPodcastState(prev => ({ 
+          ...prev, 
+          isProcessingQuestion: false
+        }));
+      }
+    } catch (error) {
+      console.error('Error handling user question:', error);
+      setPodcastState(prev => ({ 
+        ...prev, 
+        isProcessingQuestion: false,
+        aiResponse: 'Sorry, I encountered an error processing your question. Please try again.',
+        showAiResponse: true
+      }));
     }
   };
 
@@ -729,8 +990,8 @@ export default function DashboardPage() {
                 <div className="bg-white/5 rounded-xl p-6 mb-8">
                   <div className="flex justify-center space-x-4 mb-6">
                     <Button
-                      onClick={startPodcastPlayback}
-                      disabled={podcastState.isGeneratingAudio}
+                      onClick={podcastState.segments.length > 0 && !podcastState.isPlaying ? startPodcastPlayback : togglePodcastPlayback}
+                      disabled={podcastState.isGeneratingAudio || podcastState.segments.length === 0}
                       size="lg"
                       className="bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
                     >
@@ -739,7 +1000,7 @@ export default function DashboardPage() {
                           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                           Generating Audio...
                         </>
-                      ) : podcastState.isPlaying ? (
+                      ) : podcastState.isPlaying && !podcastState.isPaused ? (
                         <>
                           <Pause className="w-5 h-5 mr-2" />
                           Pause
@@ -747,24 +1008,19 @@ export default function DashboardPage() {
                       ) : (
                         <>
                           <Play className="w-5 h-5 mr-2" />
-                          Play Podcast
+                          {podcastState.isPaused ? 'Resume' : 'Play Podcast'}
                         </>
                       )}
                     </Button>
 
                     <Button
-                      onClick={startListening}
-                      disabled={podcastState.isListeningForQuestion || podcastState.isProcessingQuestion}
+                      onClick={openQuestionModal}
+                      disabled={podcastState.isProcessingQuestion || !podcastState.isPlaying}
                       variant="outline"
                       size="lg"
                       className="border-white/20 text-white hover:bg-white/10"
                     >
-                      {podcastState.isListeningForQuestion ? (
-                        <>
-                          <Mic className="w-5 h-5 mr-2 text-red-500" />
-                          🎤 Listening...
-                        </>
-                      ) : podcastState.isProcessingQuestion ? (
+                      {podcastState.isProcessingQuestion ? (
                         <>
                           <Loader2 className="w-5 h-5 mr-2 animate-spin" />
                           Processing...
@@ -778,6 +1034,26 @@ export default function DashboardPage() {
                     </Button>
                   </div>
 
+                  {/* Playback Speed Controls */}
+                  <div className="flex justify-center items-center space-x-4 mb-6">
+                    <span className="text-sm text-gray-400">Speed:</span>
+                    {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((speed) => (
+                      <Button
+                        key={speed}
+                        onClick={() => changePlaybackSpeed(speed)}
+                        variant={podcastState.playbackSpeed === speed ? "default" : "outline"}
+                        size="sm"
+                        className={`text-xs ${
+                          podcastState.playbackSpeed === speed 
+                            ? 'bg-purple-500 text-white' 
+                            : 'border-white/20 text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {speed}x
+                      </Button>
+                    ))}
+                  </div>
+
                   {/* Current Segment Display */}
                   {podcastState.segments.length > 0 && (
                     <div className="bg-white/5 rounded-lg p-4 mb-4">
@@ -785,9 +1061,14 @@ export default function DashboardPage() {
                         <span className="text-sm font-medium text-purple-400">
                           {podcastState.segments[podcastState.currentSegmentIndex]?.speaker || 'Alex'}
                         </span>
-                        <span className="text-sm text-gray-400">
-                          Segment {podcastState.currentSegmentIndex + 1} of {podcastState.segments.length}
-                        </span>
+                        <div className="flex items-center space-x-4 text-sm text-gray-400">
+                          <span>
+                            Segment {podcastState.currentSegmentIndex + 1} of {podcastState.segments.length}
+                          </span>
+                          <span>
+                            Speed: {podcastState.playbackSpeed}x
+                          </span>
+                        </div>
                       </div>
                       <p className="text-white text-sm leading-relaxed">
                         {podcastState.segments[podcastState.currentSegmentIndex]?.text || 'Loading...'}
@@ -801,6 +1082,10 @@ export default function DashboardPage() {
                       value={(podcastState.currentSegmentIndex / Math.max(podcastState.segments.length - 1, 1)) * 100} 
                       className="h-2" 
                     />
+                    <div className="flex justify-between text-xs text-gray-400 mt-1">
+                      <span>Segment {podcastState.currentSegmentIndex + 1}</span>
+                      <span>{podcastState.segments.length} segments total</span>
+                    </div>
                   </div>
 
                   {/* User Question Display */}
@@ -811,7 +1096,182 @@ export default function DashboardPage() {
                       </p>
                     </div>
                   )}
+
+                  {/* Status Messages */}
+                  {podcastState.isGeneratingAudio && (
+                    <div className="bg-yellow-500/20 border border-yellow-500/30 rounded-lg p-3 mb-4">
+                      <p className="text-yellow-200 text-sm">
+                        🎵 Generating audio for segment {podcastState.currentSegmentIndex + 1}...
+                      </p>
+                    </div>
+                  )}
+
+                  {podcastState.isProcessingQuestion && (
+                    <div className="bg-purple-500/20 border border-purple-500/30 rounded-lg p-3 mb-4">
+                      <p className="text-purple-200 text-sm">
+                        🤔 Alex and Jordan are thinking about your question...
+                      </p>
+                    </div>
+                  )}
                 </div>
+
+                {/* Question Modal */}
+                {podcastState.showQuestionModal && (
+                  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+                    <div className="bg-white/10 backdrop-blur-md rounded-2xl p-8 border border-white/20 max-w-md w-full mx-4">
+                      <div className="flex items-center justify-between mb-6">
+                        <h3 className="text-xl font-bold text-white">Ask a Question</h3>
+                        <Button
+                          onClick={closeQuestionModal}
+                          variant="ghost"
+                          size="sm"
+                          className="text-white hover:bg-white/10"
+                        >
+                          <X className="w-5 h-5" />
+                        </Button>
+                      </div>
+
+                      <div className="space-y-4">
+                        {/* Show conversation if question has been asked */}
+                        {(podcastState.userQuestion || podcastState.showAiResponse) ? (
+                          <div className="space-y-4">
+                            {/* User Question */}
+                            {podcastState.userQuestion && (
+                              <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-3">
+                                <p className="text-blue-200 text-sm">
+                                  <strong>You:</strong> {podcastState.userQuestion}
+                                </p>
+                              </div>
+                            )}
+                            
+                            {/* Processing State */}
+                            {podcastState.isProcessingQuestion && (
+                              <div className="bg-purple-500/20 border border-purple-500/30 rounded-lg p-3">
+                                <div className="flex items-center space-x-2">
+                                  <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+                                  <p className="text-purple-200 text-sm">
+                                    Alex and Jordan are thinking about your question...
+                                  </p>
+                                </div>
+                              </div>
+                            )}
+                            
+                            {/* AI Response */}
+                            {podcastState.showAiResponse && (
+                              <div className="bg-green-500/20 border border-green-500/30 rounded-lg p-3">
+                                <p className="text-green-200 text-sm whitespace-pre-line">
+                                  {podcastState.aiResponse}
+                                </p>
+                              </div>
+                            )}
+                            
+                            {/* Continue Button */}
+                            {podcastState.showAiResponse && !podcastState.isProcessingQuestion && (
+                              <div className="flex space-x-2">
+                                <Button
+                                  onClick={closeQuestionModal}
+                                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
+                                >
+                                  Continue Podcast
+                                </Button>
+                                <Button
+                                  onClick={() => setPodcastState(prev => ({ 
+                                    ...prev, 
+                                    userQuestion: '', 
+                                    aiResponse: '', 
+                                    showAiResponse: false 
+                                  }))}
+                                  variant="outline"
+                                  className="border-white/20 text-white hover:bg-white/10"
+                                >
+                                  Ask Another
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            {/* Voice Input */}
+                            <div className="space-y-2">
+                              <Button
+                                onClick={startListening}
+                                disabled={podcastState.isListeningForQuestion || podcastState.isProcessingQuestion}
+                                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                              >
+                                {podcastState.isListeningForQuestion ? (
+                                  <>
+                                    <Mic className="w-5 h-5 mr-2 text-red-500" />
+                                    🎤 Listening...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Mic className="w-5 h-5 mr-2" />
+                                    Speak Your Question
+                                  </>
+                                )}
+                              </Button>
+                              
+                              {podcastState.userQuestion && !podcastState.isListeningForQuestion && !podcastState.showAiResponse && (
+                                <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-3">
+                                  <p className="text-blue-200 text-sm">
+                                    <strong>You said:</strong> {podcastState.userQuestion}
+                                  </p>
+                                  <div className="flex space-x-2 mt-2">
+                                    <Button
+                                      onClick={() => handleModalQuestion(podcastState.userQuestion)}
+                                      size="sm"
+                                      className="bg-green-500 hover:bg-green-600"
+                                    >
+                                      Submit
+                                    </Button>
+                                    <Button
+                                      onClick={() => setPodcastState(prev => ({ ...prev, userQuestion: '' }))}
+                                      size="sm"
+                                      variant="outline"
+                                      className="border-white/20 text-white hover:bg-white/10"
+                                    >
+                                      Try Again
+                                    </Button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Divider */}
+                            <div className="flex items-center space-x-4">
+                              <div className="flex-1 h-px bg-white/20"></div>
+                              <span className="text-gray-400 text-sm">or</span>
+                              <div className="flex-1 h-px bg-white/20"></div>
+                            </div>
+
+                            {/* Text Input */}
+                            <div className="space-y-2">
+                              <div className="flex space-x-2">
+                                <input
+                                  type="text"
+                                  value={podcastState.textQuestion}
+                                  onChange={(e) => handleTextInputChange(e.target.value)}
+                                  onKeyPress={(e) => e.key === 'Enter' && handleModalQuestion(podcastState.textQuestion)}
+                                  placeholder="Type your question here..."
+                                  className="flex-1 px-4 py-2 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                  autoFocus={!podcastState.isListeningForQuestion}
+                                  disabled={podcastState.isProcessingQuestion}
+                                />
+                                <Button
+                                  onClick={() => handleModalQuestion(podcastState.textQuestion)}
+                                  disabled={!podcastState.textQuestion.trim() || podcastState.isProcessingQuestion}
+                                  className="bg-blue-500 hover:bg-blue-600"
+                                >
+                                  <Send className="w-5 h-5" />
+                                </Button>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Full Transcript */}
                 <div className="bg-white/5 rounded-xl p-6">
