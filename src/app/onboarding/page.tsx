@@ -119,8 +119,14 @@ export default function OnboardingPage() {
   // Existing state
   const [mode, setMode] = useState<OnboardingMode>('choice');
   const [currentStep, setCurrentStep] = useState(0);
-  const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedContent] = useState<GeneratedContent | null>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('generatedContent');
+      return stored ? JSON.parse(stored) : null;
+    }
+    return null;
+  });
+
   const [customInterest, setCustomInterest] = useState('');
 
   // Realtime state
@@ -275,7 +281,7 @@ export default function OnboardingPage() {
             return;
           }
 
-          await connectToRealtimeAPI({ client_secret: apiKeyData.api_key });
+          await connectToRealtimeAPI();
         }
       }
     } catch (error) {
@@ -284,7 +290,7 @@ export default function OnboardingPage() {
     }
   };
 
-  const connectToRealtimeAPI = async (tokenData: { client_secret: string }) => {
+  const connectToRealtimeAPI = async () => {
     const url = `wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17`;
     
     wsRef.current = new WebSocket(url);
@@ -495,7 +501,12 @@ export default function OnboardingPage() {
           dailyTime: data.dailyTime,
           podcastStyle: data.communicationStyle, // Map to existing field
           preferredSpeed: data.preferredSpeed,
-          mantra: `Learning Goals: ${data.learningGoals.join(', ')}. Info Preferences: ${data.informationPreferences.join(', ')}`
+          mantra: `Learning Goals: ${data.learningGoals.join(', ')}. Info Preferences: ${data.informationPreferences.join(', ')}`,
+          // Send additional fields for comprehensive summary generation
+          learningGoals: data.learningGoals,
+          informationPreferences: data.informationPreferences,
+          communicationStyle: data.communicationStyle,
+          personalityTraits: data.personalityTraits
         }),
       });
 
@@ -864,7 +875,7 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
                   Welcome to Zero Noise
                 </h1>
                 <p className="text-xl text-gray-300 mb-8">
-                  Let's personalize your content experience. Choose how you'd like to get started:
+                  Let&apos;s personalize your content experience. Choose how you&apos;d like to get started:
                 </p>
               </div>
 
