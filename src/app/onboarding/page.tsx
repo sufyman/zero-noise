@@ -281,24 +281,6 @@ export default function OnboardingPage() {
         localStorage.setItem('generatedContent', JSON.stringify(content));
         localStorage.setItem('contentGenerationStatus', 'complete');
         
-        // Also try to save to Supabase for persistence (non-blocking)
-        fetch('/api/content', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: 'all',
-            data: content
-          })
-        }).then(response => {
-          if (response.ok) {
-            console.log('✅ Content also saved to Supabase for persistence');
-          } else {
-            console.log('⚠️ Failed to save to Supabase, but content is available in localStorage');
-          }
-        }).catch(error => {
-          console.log('⚠️ Supabase save failed, but content is available in localStorage:', error);
-        });
-        
         // Trigger a custom event to notify the dashboard
         window.dispatchEvent(new CustomEvent('contentGenerationComplete'));
       }).catch((error) => {

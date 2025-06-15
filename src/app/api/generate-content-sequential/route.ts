@@ -139,77 +139,62 @@ async function generatePodcastContent(summary: string, interests: string[], pref
 
 async function generateReportContent(summary: string, interests: string[], preferences: OnboardingData) {
   const reportPrompt = `
-    You are a senior strategic analyst creating a comprehensive market intelligence report. This report must be DETAILED and COMPREHENSIVE - aim for 2000-3000 words with substantive analysis.
+    You are a world-class strategic analyst creating a comprehensive intelligence report for a sophisticated professional audience.
 
-    USER CONTEXT:
-    - Primary Interest: ${interests[0]}
-    - Communication Style: ${preferences.communicationStyle}
-    - Learning Goals: ${preferences.learningGoals.join(', ')}
+    USER PROFILE: ${summary}
+    PRIMARY INTERESTS: ${interests.join(', ')}
+    COMMUNICATION STYLE: ${preferences.communicationStyle}
+    LEARNING GOALS: ${preferences.learningGoals.join(', ')}
 
-    CRITICAL REQUIREMENT: This must be a COMPREHENSIVE, DETAILED report with substantive analysis and insights.
-
-    Write a strategic intelligence report with the following structure. Make each section detailed and insightful:
+    Create a comprehensive strategic intelligence report with the following structure:
 
     # EXECUTIVE SUMMARY
-    Comprehensive overview covering:
-    - Critical market findings and business implications
-    - Key competitive dynamics and market forces
-    - Major opportunities and strategic risks
-    - Essential recommended actions
-    - Timeline expectations for market evolution
+    - 3-4 key findings that will reshape thinking
+    - Strategic implications and market impact
+    - Critical decisions required in next 6-12 months
 
     # MARKET LANDSCAPE ANALYSIS
-    Detailed analysis covering:
-    - Current market size, growth rates, and projections
-    - Analysis of major market players and their strategies
-    - Recent M&A activity and strategic partnerships
-    - Regulatory environment and policy impacts
-    - Geographic distribution and technology adoption
+    - Current market state with specific data points
+    - Key players and their strategic positions
+    - Recent developments and their significance
 
     # TREND ANALYSIS
-    Analyze 4-5 major trends with detail:
-    - Current market state and drivers
-    - Companies and examples driving each trend
-    - Impact data and growth projections
-    - Adoption timelines and strategic implications
+    - 3-5 major trends with evidence and examples
+    - Underlying drivers and mechanisms
+    - Interconnections between trends
 
-    # COMPETITIVE INTELLIGENCE
-    Strategic competitive analysis:
-    - Profiles of market leaders and their strategies
-    - Emerging disruptors and value propositions
-    - Competitive positioning and differentiation
-    - Strategic vulnerabilities and opportunities
+    # DEEP DIVE SECTIONS
+    - Detailed analysis of 2-3 critical areas
+    - Case studies with real companies/examples
+    - Technical explanations made accessible
 
-    # TECHNOLOGY AND INNOVATION
-    Innovation analysis:
-    - Current technology state and capabilities
-    - Breakthrough innovations and potential
-    - Investment flows and development timelines
-    - Patent landscapes and IP trends
+    # EXPERT PERSPECTIVES
+    - Industry leader insights and predictions
+    - Contrarian viewpoints with reasoning
+    - Academic and research perspectives
+
+    # PREDICTIVE ANALYSIS
+    - 12-18 month outlook with scenarios
+    - Risk assessment and mitigation strategies
+    - Opportunity identification
 
     # STRATEGIC RECOMMENDATIONS
-    Actionable recommendations:
-    - Specific strategies for market participants
-    - Investment priorities and resource allocation
-    - Implementation approaches and timelines
-    - Success metrics and performance indicators
+    - Specific, actionable advice
+    - Implementation frameworks
+    - Success metrics and milestones
 
-    # FUTURE OUTLOOK
-    Forward-looking analysis:
-    - 12-month market predictions
-    - Scenario planning (optimistic, realistic, pessimistic)
-    - Long-term evolution and positioning strategies
+    # RESOURCES AND FURTHER READING
+    - Key sources and references
+    - Recommended follow-up research
+    - Expert contacts and thought leaders
 
-    WRITING REQUIREMENTS:
-    - Use specific data points, statistics, and financial metrics
-    - Reference real companies, products, and recent initiatives
-    - Include recent developments from 2024-2025
-    - Provide concrete examples and case studies
-    - Write in ${preferences.communicationStyle.toLowerCase()} style
-    - Ensure each section is substantial and detailed
-    - Total target: 2000-3000 words with high-quality analysis
-
-    Context: Current date is December 2024. Focus on recent market developments and emerging trends in ${interests[0]}.
+    Requirements:
+    - Include specific statistics and data points
+    - Reference real companies and initiatives
+    - Provide contrarian analysis where appropriate
+    - Focus on actionable intelligence
+    - Maintain analytical rigor throughout
+    - Write for ${preferences.communicationStyle} communication style
   `;
 
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -223,17 +208,17 @@ async function generateReportContent(summary: string, interests: string[], prefe
       messages: [
         {
           role: 'system',
-          content: 'You are a senior strategic analyst specializing in comprehensive market intelligence reports. You excel at creating detailed, long-form analysis that provides substantial value to executive audiences. Your reports are known for being thorough, data-rich, and actionable. Always write comprehensive, detailed sections that meet the specified word count requirements.'
+          content: 'You are a world-class strategic analyst and researcher with deep expertise across multiple industries. Create comprehensive, actionable intelligence reports that provide genuine value to sophisticated professionals.'
         },
         { role: 'user', content: reportPrompt }
       ],
-      max_tokens: 4000, // Balanced for quality and speed
+      max_tokens: 4000,
       temperature: 0.7,
     }),
   });
 
   if (!response.ok) {
-    // Fallback to GPT-4o-mini with same comprehensive prompt
+    // Fallback to GPT-4o-mini
     const fallbackResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -245,11 +230,11 @@ async function generateReportContent(summary: string, interests: string[], prefe
         messages: [
           {
             role: 'system',
-            content: 'You are a senior strategic analyst creating comprehensive, long-form intelligence reports. Your reports must be detailed and substantial, meeting specified word count requirements for each section.'
+            content: 'You are a world-class strategic analyst and researcher. Create comprehensive, actionable intelligence reports.'
           },
           { role: 'user', content: reportPrompt }
         ],
-        max_tokens: 8000, // Increased for longer content
+        max_tokens: 4000,
         temperature: 0.7,
       }),
     });
@@ -262,9 +247,9 @@ async function generateReportContent(summary: string, interests: string[], prefe
     const content = data.choices[0]?.message?.content || 'Report content unavailable';
 
     return {
-      title: `Strategic Intelligence Report: ${interests[0]} - Comprehensive Market Analysis & Strategic Outlook`,
+      title: `Strategic Intelligence Report: ${interests[0]} Market Analysis & Future Outlook`,
       content,
-      url: `/reports/comprehensive-${Date.now()}`
+      url: `/reports/sequential-${Date.now()}`
     };
   }
 
@@ -272,9 +257,9 @@ async function generateReportContent(summary: string, interests: string[], prefe
   const content = data.choices[0]?.message?.content || 'Report content unavailable';
 
   return {
-    title: `Strategic Intelligence Report: ${interests[0]} - Comprehensive Market Analysis & Strategic Outlook`,
+    title: `Strategic Intelligence Report: ${interests[0]} Market Analysis & Future Outlook`,
     content,
-    url: `/reports/comprehensive-${Date.now()}`
+    url: `/reports/sequential-${Date.now()}`
   };
 }
 

@@ -260,99 +260,8 @@ export default function DashboardPage() {
 
     const loadData = async () => {
       try {
-        // First priority: Check localStorage for immediate content (works in production)
-        let contentGenerationStatus = localStorage.getItem('contentGenerationStatus') || 'in-progress';
-        const storedGeneratedContent = localStorage.getItem('generatedContent');
-        const storedOnboardingData = localStorage.getItem('onboardingData');
-        
-        console.log('📱 Checking localStorage first...', {
-          contentStatus: contentGenerationStatus,
-          hasContent: !!storedGeneratedContent,
-          hasOnboarding: !!storedOnboardingData
-        });
 
-        // If we have complete content in localStorage, use it immediately
-        if (storedOnboardingData) {
-          const localOnboardingData = JSON.parse(storedOnboardingData);
-          const data: OnboardingData = {
-            interests: localOnboardingData.interests || [],
-            contentFormats: localOnboardingData.contentFormats || ['podcast'],
-            dailyTime: localOnboardingData.dailyTime || 15,
-            podcastStyle: localOnboardingData.podcastStyle || 'conversational',
-            preferredSpeed: localOnboardingData.preferredSpeed || 1.5,
-            personalityTraits: localOnboardingData.personalityTraits || [],
-            communicationStyle: localOnboardingData.communicationStyle || 'Casual & Conversational',
-            learningGoals: localOnboardingData.learningGoals || [],
-            informationPreferences: localOnboardingData.informationPreferences || []
-          };
-          
-          setOnboardingData(data);
-
-          // Initialize content cards based on selected formats
-          const cards: ContentCard[] = [];
-
-          if (data.contentFormats.includes('podcast')) {
-            cards.push({
-              id: 'podcast',
-              type: 'podcast',
-              title: `${data.interests.slice(0, 2).join(' & ')} Weekly Podcast`,
-              description: `A ${data.dailyTime}-minute personalized podcast covering your interests`,
-              icon: Headphones,
-              status: contentGenerationStatus === 'complete' ? 'complete' : 
-                     contentGenerationStatus === 'error' ? 'error' : 'in-progress',
-              estimatedTime: `${data.dailyTime} min`
-            });
-          }
-
-          if (data.contentFormats.includes('text')) {
-            cards.push({
-              id: 'report',
-              type: 'report',
-              title: `${data.interests[0]} Trends Report`,
-              description: 'Comprehensive analysis with actionable insights',
-              icon: FileText,
-              status: contentGenerationStatus === 'complete' ? 'complete' : 
-                     contentGenerationStatus === 'error' ? 'error' : 'in-progress',
-              estimatedTime: '5-10 min read'
-            });
-          }
-
-          if (data.contentFormats.includes('video')) {
-            cards.push({
-              id: 'tiktok',
-              type: 'tiktok',
-              title: `60-Second ${data.interests[0]} Breakthrough`,
-              description: 'Engaging short-form video script for social media',
-              icon: Video,
-              status: contentGenerationStatus === 'complete' ? 'complete' : 
-                     contentGenerationStatus === 'error' ? 'error' : 'in-progress',
-              estimatedTime: '60 seconds'
-            });
-          }
-
-          setContentCards(cards);
-
-          // Load generated content if available in localStorage
-          if (storedGeneratedContent && contentGenerationStatus === 'complete') {
-            const content = JSON.parse(storedGeneratedContent);
-            setGeneratedContent(content);
-            
-            // Parse podcast script into segments if podcast content exists
-            if (content.podcast && content.podcast.script) {
-              const segments = parsePodcastScript(content.podcast.script);
-              
-              setPodcastState(prev => ({ ...prev, segments }));
-              // Start pre-generating audio immediately
-              preGenerateAllAudioSegments(segments);
-            }
-          }
-          
-          console.log('✅ Loaded content from localStorage');
-          return; // Success with localStorage, no need to check Supabase
-        }
-
-        // Fallback: Load from Supabase if localStorage is empty
-        console.log('📦 LocalStorage empty, checking Supabase...');
+        // Load user preferences and content from Supabase
         const preferencesResponse = await fetch('/api/preferences');
         if (preferencesResponse.ok) {
           const preferencesData = await preferencesResponse.json();
@@ -374,28 +283,21 @@ export default function DashboardPage() {
             
             setOnboardingData(data);
 
-            // Check if we have generated content in Supabase
+            // Load generated content from Supabase first
+            let contentGenerationStatus = 'in-progress';
+            let storedGeneratedContent = null;
+            
             if (preferencesData.content?.generatedContent) {
-              console.log('📦 Found generated content in Supabase, syncing to localStorage');
-              const content = preferencesData.content.generatedContent;
-              
-              // Sync to localStorage for faster future access
-              localStorage.setItem('generatedContent', JSON.stringify(content));
-              localStorage.setItem('contentGenerationStatus', 'complete');
-              localStorage.setItem('onboardingData', JSON.stringify(data));
-              
-              setGeneratedContent(content);
-              
-              // Parse podcast script into segments if podcast content exists
-              if (content.podcast && content.podcast.script) {
-                const segments = parsePodcastScript(content.podcast.script);
-                
-                setPodcastState(prev => ({ ...prev, segments }));
-                // Start pre-generating audio immediately
-                preGenerateAllAudioSegments(segments);
-              }
-              
+              console.log('📦 Found generated content in Supabase');
               contentGenerationStatus = 'complete';
+              storedGeneratedContent = JSON.stringify(preferencesData.content.generatedContent);
+              // Also store in localStorage for immediate access
+              localStorage.setItem('generatedContent', storedGeneratedContent);
+              localStorage.setItem('contentGenerationStatus', 'complete');
+            } else {
+              // Fallback to localStorage for content generation status (temporary during generation)
+              contentGenerationStatus = localStorage.getItem('contentGenerationStatus') || 'in-progress';
+              storedGeneratedContent = localStorage.getItem('generatedContent');
             }
 
             // Initialize content cards based on selected formats
@@ -408,7 +310,8 @@ export default function DashboardPage() {
                 title: `${data.interests.slice(0, 2).join(' & ')} Weekly Podcast`,
                 description: `A ${data.dailyTime}-minute personalized podcast covering your interests`,
                 icon: Headphones,
-                status: contentGenerationStatus === 'complete' ? 'complete' : 'in-progress',
+                status: contentGenerationStatus === 'complete' ? 'complete' : 
+                       contentGenerationStatus === 'error' ? 'error' : 'in-progress',
                 estimatedTime: `${data.dailyTime} min`
               });
             }
@@ -420,7 +323,8 @@ export default function DashboardPage() {
                 title: `${data.interests[0]} Trends Report`,
                 description: 'Comprehensive analysis with actionable insights',
                 icon: FileText,
-                status: contentGenerationStatus === 'complete' ? 'complete' : 'in-progress',
+                status: contentGenerationStatus === 'complete' ? 'complete' : 
+                       contentGenerationStatus === 'error' ? 'error' : 'in-progress',
                 estimatedTime: '5-10 min read'
               });
             }
@@ -432,13 +336,28 @@ export default function DashboardPage() {
                 title: `60-Second ${data.interests[0]} Breakthrough`,
                 description: 'Engaging short-form video script for social media',
                 icon: Video,
-                status: contentGenerationStatus === 'complete' ? 'complete' : 'in-progress',
+                status: contentGenerationStatus === 'complete' ? 'complete' : 
+                       contentGenerationStatus === 'error' ? 'error' : 'in-progress',
                 estimatedTime: '60 seconds'
               });
             }
 
             setContentCards(cards);
-            console.log('✅ Loaded content from Supabase');
+
+            // Load generated content if available
+            if (storedGeneratedContent && contentGenerationStatus === 'complete') {
+              const content = JSON.parse(storedGeneratedContent);
+              setGeneratedContent(content);
+              
+              // Parse podcast script into segments if podcast content exists
+              if (content.podcast && content.podcast.script) {
+                const segments = parsePodcastScript(content.podcast.script);
+                
+                setPodcastState(prev => ({ ...prev, segments }));
+                // Start pre-generating audio immediately
+                preGenerateAllAudioSegments(segments);
+              }
+            }
           } else {
             // User hasn't completed onboarding, redirect to onboarding
             window.location.href = '/onboarding';
@@ -460,7 +379,7 @@ export default function DashboardPage() {
 
     loadData();
 
-    // Poll for content generation completion (works in production)
+    // Poll for content generation completion
     const pollInterval = setInterval(() => {
       const status = localStorage.getItem('contentGenerationStatus');
       const storedContent = localStorage.getItem('generatedContent');
@@ -473,9 +392,9 @@ export default function DashboardPage() {
         if (content.podcast && content.podcast.script) {
           const segments = parsePodcastScript(content.podcast.script);
           
-          setPodcastState(prev => ({ ...prev, segments }));
-          // Start pre-generating audio immediately
-          preGenerateAllAudioSegments(segments);
+                      setPodcastState(prev => ({ ...prev, segments }));
+            // Start pre-generating audio immediately
+            preGenerateAllAudioSegments(segments);
         }
         
         setContentCards(prev => prev.map(card => ({
@@ -646,23 +565,8 @@ export default function DashboardPage() {
   }, [handleUserQuestion]);
 
   // Parse podcast script into segments with speakers
-  const parsePodcastScript = (script: string | unknown[]): PodcastSegment[] => {
+  const parsePodcastScript = (script: string): PodcastSegment[] => {
     const segments: PodcastSegment[] = [];
-    
-    // Handle if script is already an array of segments (from API)
-    if (typeof script !== 'string') {
-      if (Array.isArray(script)) {
-        return script.map((segment: unknown, index: number) => ({
-          speaker: (segment as { speaker?: string })?.speaker || (index % 2 === 0 ? 'Alex' : 'Jordan'),
-          text: (segment as { text?: string })?.text || segment?.toString() || '',
-          timestamp: (segment as { timestamp?: number })?.timestamp || index * 20,
-          audioElement: (segment as { audioElement?: HTMLAudioElement })?.audioElement
-        }));
-      }
-      // If it's an object, try to convert to string
-      script = JSON.stringify(script);
-    }
-    
     const lines = script.split('\n').filter(line => line.trim());
     
     let currentTimestamp = 0;
@@ -670,85 +574,42 @@ export default function DashboardPage() {
     
     for (const line of lines) {
       const trimmedLine = line.trim();
-      if (!trimmedLine || trimmedLine.length < 10) continue;
+      if (!trimmedLine) continue;
       
-      // Skip common formatting markers and headers
-      if (trimmedLine.match(/^(#|##|###|\*\*|Title:|Description:|Segment \d+|Opening:|Closing:)/i)) {
-        continue;
+      // Check if line indicates speaker change
+      if (trimmedLine.toLowerCase().includes('jordan') || trimmedLine.toLowerCase().includes('host 2')) {
+        currentSpeaker = 'Jordan';
+      } else if (trimmedLine.toLowerCase().includes('alex') || trimmedLine.toLowerCase().includes('host 1')) {
+        currentSpeaker = 'Alex';
       }
       
-      let extractedText = '';
-      let speakerForThisLine = currentSpeaker;
-      
-      // Check for explicit speaker indicators
-      if (trimmedLine.toLowerCase().match(/^(alex|host 1|speaker 1)[:*]\s*/)) {
-        speakerForThisLine = 'Alex';
-        extractedText = trimmedLine.replace(/^(alex|host 1|speaker 1)[:*]\s*/i, '').trim();
-      } else if (trimmedLine.toLowerCase().match(/^(jordan|host 2|speaker 2)[:*]\s*/)) {
-        speakerForThisLine = 'Jordan';
-        extractedText = trimmedLine.replace(/^(jordan|host 2|speaker 2)[:*]\s*/i, '').trim();
-      } else if (trimmedLine.toLowerCase().includes('alex') && trimmedLine.toLowerCase().includes(':')) {
-        speakerForThisLine = 'Alex';
-        extractedText = trimmedLine.split(':').slice(1).join(':').trim();
-      } else if (trimmedLine.toLowerCase().includes('jordan') && trimmedLine.toLowerCase().includes(':')) {
-        speakerForThisLine = 'Jordan';
-        extractedText = trimmedLine.split(':').slice(1).join(':').trim();
-      } else {
-        // No explicit speaker, use the current speaker and the full line
-        extractedText = trimmedLine;
-      }
-      
-      // Clean up the extracted text
-      extractedText = extractedText
-        .replace(/^\*+|\*+$/g, '') // Remove asterisks
-        .replace(/^["']|["']$/g, '') // Remove quotes
-        .replace(/\*\*([^*]+)\*\*/g, '$1') // Remove bold formatting
-        .replace(/\*([^*]+)\*/g, '$1') // Remove italic formatting
-        .trim();
-      
-      // Only add substantial content
-      if (extractedText && extractedText.length > 15) {
+      // Skip speaker name lines
+      if (trimmedLine.toLowerCase().startsWith('alex:') || 
+          trimmedLine.toLowerCase().startsWith('jordan:') ||
+          trimmedLine.toLowerCase().startsWith('host 1:') ||
+          trimmedLine.toLowerCase().startsWith('host 2:')) {
+        const text = trimmedLine.split(':').slice(1).join(':').trim();
+        if (text) {
+          segments.push({
+            speaker: currentSpeaker,
+            text: text,
+            timestamp: currentTimestamp
+          });
+          currentTimestamp += Math.max(15, text.length / 10); // Estimate duration
+        }
+      } else if (trimmedLine.length > 20) { // Substantial content
         segments.push({
-          speaker: speakerForThisLine,
-          text: extractedText,
+          speaker: currentSpeaker,
+          text: trimmedLine,
           timestamp: currentTimestamp
         });
+        currentTimestamp += Math.max(15, trimmedLine.length / 10);
         
-        // Estimate duration based on text length (roughly 150 words per minute)
-        const wordCount = extractedText.split(' ').length;
-        const estimatedDuration = Math.max(10, (wordCount / 150) * 60);
-        currentTimestamp += estimatedDuration;
-        
-        // Alternate speakers for natural conversation if no explicit speaker was found
-        if (!trimmedLine.toLowerCase().match(/(alex|jordan|host [12]|speaker [12])/)) {
-          currentSpeaker = currentSpeaker === 'Alex' ? 'Jordan' : 'Alex';
-        } else {
-          currentSpeaker = speakerForThisLine;
-        }
+        // Alternate speakers for natural conversation
+        currentSpeaker = currentSpeaker === 'Alex' ? 'Jordan' : 'Alex';
       }
     }
     
-    // If we didn't find any segments, create a fallback
-    if (segments.length === 0) {
-      console.log('⚠️ No segments found, creating fallback segments from raw script');
-      
-      // Split the script into chunks and create segments
-      const words = script.split(' ');
-      const chunkSize = Math.max(50, Math.floor(words.length / 6)); // Aim for ~6 segments
-      
-      for (let i = 0; i < words.length; i += chunkSize) {
-        const chunk = words.slice(i, i + chunkSize).join(' ').trim();
-        if (chunk.length > 20) {
-          segments.push({
-            speaker: i % (chunkSize * 2) < chunkSize ? 'Alex' : 'Jordan',
-            text: chunk,
-            timestamp: (i / chunkSize) * 30 // 30 seconds per segment
-          });
-        }
-      }
-    }
-    
-    console.log(`📝 Parsed ${segments.length} podcast segments:`, segments.slice(0, 2));
     return segments;
   };
 

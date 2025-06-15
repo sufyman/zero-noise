@@ -195,12 +195,6 @@ export async function POST(request: NextRequest) {
       case 'video':
         updatedContent.generatedContent.tikTokScript = data as GeneratedVideo;
         break;
-      case 'all':
-        // Save complete generated content object
-        if (data.podcast) updatedContent.generatedContent.podcast = data.podcast;
-        if (data.richTextReport) updatedContent.generatedContent.richTextReport = data.richTextReport;
-        if (data.tikTokScript) updatedContent.generatedContent.tikTokScript = data.tikTokScript;
-        break;
       default:
         return NextResponse.json({ error: 'Invalid content type' }, { status: 400 });
     }
