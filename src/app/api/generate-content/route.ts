@@ -112,7 +112,19 @@ export async function POST(request: NextRequest) {
     - Make complex topics accessible without dumbing them down
     - Provide clear value that justifies the time investment
 
-    Format your response clearly with distinct sections for each content type.
+    Format your response with these EXACT section headers for proper parsing:
+    
+    === PODCAST SECTION START ===
+    [Your podcast script content here]
+    === PODCAST SECTION END ===
+    
+    === REPORT SECTION START ===
+    [Your research report content here]
+    === REPORT SECTION END ===
+    
+    === VIDEO SECTION START ===
+    [Your video script content here]
+    === VIDEO SECTION END ===
     `;
 
     // Try advanced model first, fall back to standard if needed
@@ -210,53 +222,74 @@ function parseAdvancedGeneratedContent(content: string, preferences: OnboardingD
   console.log('🔍 Parsing AI-generated content...');
   console.log('📝 Content preview:', content.substring(0, 500) + '...');
 
-  // More flexible parsing patterns to handle various AI formatting
-  const podcastPatterns = [
-    /1\.\s*PODCAST\s*SCRIPT[\s\S]*?(?=2\.|$)/i,
-    /PODCAST[\s\S]*?(?=(?:2\.|#|##|\*\*|RESEARCH|REPORT|VIDEO|$))/i,
-    /(?:podcast|episode)[\s\S]*?(?=(?:#|##|\*\*|report|video|research|$))/i
-  ];
-  
-  const reportPatterns = [
-    /2\.\s*(?:COMPREHENSIVE\s*)?RESEARCH\s*REPORT[\s\S]*?(?=3\.|$)/i,
-    /(?:RESEARCH\s*)?REPORT[\s\S]*?(?=(?:3\.|#|##|\*\*|VIDEO|$))/i,
-    /(?:report|analysis)[\s\S]*?(?=(?:#|##|\*\*|video|$))/i
-  ];
-  
-  const videoPatterns = [
-    /3\.\s*(?:ADVANCED\s*)?VIDEO\s*SCRIPT[\s\S]*$/i,
-    /VIDEO[\s\S]*$/i,
-    /(?:video|script|tiktok)[\s\S]*$/i
-  ];
+  // Primary parsing: Look for the exact delimiters we requested
+  const podcastMatch = content.match(/=== PODCAST SECTION START ===([\s\S]*?)=== PODCAST SECTION END ===/i);
+  const reportMatch = content.match(/=== REPORT SECTION START ===([\s\S]*?)=== REPORT SECTION END ===/i);
+  const videoMatch = content.match(/=== VIDEO SECTION START ===([\s\S]*?)=== VIDEO SECTION END ===/i);
 
-  // Try each pattern until one works
-  let podcastContent = '';
-  for (const pattern of podcastPatterns) {
-    const match = content.match(pattern);
-    if (match && match[0].trim().length > 100) {
-      podcastContent = match[0];
-      console.log('✅ Found podcast content via pattern');
-      break;
+  let podcastContent = podcastMatch ? podcastMatch[1].trim() : '';
+  let reportContent = reportMatch ? reportMatch[1].trim() : '';
+  let videoContent = videoMatch ? videoMatch[1].trim() : '';
+
+  console.log('🎯 Primary parsing results:');
+  console.log(`- Podcast found via delimiters: ${!!podcastContent} (${podcastContent.length} chars)`);
+  console.log(`- Report found via delimiters: ${!!reportContent} (${reportContent.length} chars)`);
+  console.log(`- Video found via delimiters: ${!!videoContent} (${videoContent.length} chars)`);
+
+  // Fallback patterns for various AI formatting if delimiters weren't used
+  if (!podcastContent || !reportContent || !videoContent) {
+    console.log('⚠️ Delimiter parsing incomplete, trying fallback patterns...');
+    
+    const podcastPatterns = [
+      /1\.\s*PODCAST\s*SCRIPT[\s\S]*?(?=2\.|$)/i,
+      /PODCAST[\s\S]*?(?=(?:2\.|#|##|\*\*|RESEARCH|REPORT|VIDEO|$))/i,
+      /(?:podcast|episode)[\s\S]*?(?=(?:#|##|\*\*|report|video|research|$))/i
+    ];
+    
+    const reportPatterns = [
+      /2\.\s*(?:COMPREHENSIVE\s*)?RESEARCH\s*REPORT[\s\S]*?(?=3\.|$)/i,
+      /(?:RESEARCH\s*)?REPORT[\s\S]*?(?=(?:3\.|#|##|\*\*|VIDEO|$))/i,
+      /(?:report|analysis)[\s\S]*?(?=(?:#|##|\*\*|video|$))/i
+    ];
+    
+    const videoPatterns = [
+      /3\.\s*(?:ADVANCED\s*)?VIDEO\s*SCRIPT[\s\S]*$/i,
+      /VIDEO[\s\S]*$/i,
+      /(?:video|script|tiktok)[\s\S]*$/i
+    ];
+
+    // Try fallback patterns only if primary parsing failed
+    if (!podcastContent) {
+      for (const pattern of podcastPatterns) {
+        const match = content.match(pattern);
+        if (match && match[0].trim().length > 100) {
+          podcastContent = match[0];
+          console.log('✅ Found podcast content via fallback pattern');
+          break;
+        }
+      }
     }
-  }
 
-  let reportContent = '';
-  for (const pattern of reportPatterns) {
-    const match = content.match(pattern);
-    if (match && match[0].trim().length > 100) {
-      reportContent = match[0];
-      console.log('✅ Found report content via pattern');
-      break;
+    if (!reportContent) {
+      for (const pattern of reportPatterns) {
+        const match = content.match(pattern);
+        if (match && match[0].trim().length > 100) {
+          reportContent = match[0];
+          console.log('✅ Found report content via fallback pattern');
+          break;
+        }
+      }
     }
-  }
 
-  let videoContent = '';
-  for (const pattern of videoPatterns) {
-    const match = content.match(pattern);
-    if (match && match[0].trim().length > 50) {
-      videoContent = match[0];
-      console.log('✅ Found video content via pattern');
-      break;
+    if (!videoContent) {
+      for (const pattern of videoPatterns) {
+        const match = content.match(pattern);
+        if (match && match[0].trim().length > 50) {
+          videoContent = match[0];
+          console.log('✅ Found video content via fallback pattern');
+          break;
+        }
+      }
     }
   }
 
