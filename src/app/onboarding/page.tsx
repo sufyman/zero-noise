@@ -145,7 +145,7 @@ export default function OnboardingPage() {
   });
 
   // ElevenLabs conversation state
-  const [user, setUser] = useState<User | null>(null);
+  const [user] = useState<User | null>(null);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [microphonePermission, setMicrophonePermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
   const [volume, setVolume] = useState(0.8);
@@ -156,7 +156,6 @@ export default function OnboardingPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const responseInProgressRef = useRef(false);
 
   const manualSteps = [
     { title: 'Interests', key: 'interests' as keyof OnboardingData },
@@ -989,7 +988,7 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
                   {microphonePermission === 'prompt' && (
                     <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-4 mb-6">
                       <p className="text-blue-200 text-sm">
-                        <strong>Voice Chat Available:</strong> We'll ask for microphone access to enable voice conversation. 
+                        <strong>Voice Chat Available:</strong> We&apos;ll ask for microphone access to enable voice conversation. 
                         You can also use text chat if you prefer.
                       </p>
                     </div>
@@ -1082,7 +1081,7 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
                 <div className="mt-8 p-6 bg-black/20 rounded-lg">
                   <h3 className="font-semibold text-white mb-3">How it works:</h3>
                   <ul className="space-y-2 text-sm text-gray-300">
-                    <li>• Click "Start Conversation" to begin chatting with our AI assistant</li>
+                    <li>• Click &quot;Start Conversation&quot; to begin chatting with our AI assistant</li>
                     <li>• The AI will guide you through setting up your account and preferences</li>
                     <li>• You can speak naturally or type your responses</li>
                     <li>• The AI will ask about your interests, content preferences, and personalization options</li>
