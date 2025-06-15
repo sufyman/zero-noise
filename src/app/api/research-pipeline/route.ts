@@ -24,13 +24,7 @@ interface SearchResult {
   error?: string;
 }
 
-interface ReportData {
-  executiveSummary: string;
-  detailedFindings: string;
-  actionableInsights: string;
-  sourceBibliography: string;
-  fullReport: string;
-}
+
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,8 +32,8 @@ export async function POST(request: NextRequest) {
     
     const { 
       transcript, 
-      searchTimeframe = '6 months',
-      queryCount = 10,
+      searchTimeframe = '3 month',
+      queryCount = 5,
       searchContext = 'high',
       reportStyle = 'detailed'
     } = await request.json();
@@ -75,6 +69,8 @@ export async function POST(request: NextRequest) {
     const queryExtractionStart = Date.now();
     
     const queryExtractionPrompt = `Analyze this conversation/transcript and extract ${queryCount} intelligence queries to help the user stay up-to-date on their interests.
+
+    CURRENT TIME: ${new Date().toISOString()}
 
 INPUT: ${transcript}
 
@@ -251,137 +247,41 @@ Return the freshest intelligence with clear recency indicators and source attrib
     const searchResults = await Promise.all(searchPromises);
     const searchExecutionTime = Date.now() - searchStartTime;
     
-    const successfulSearches = searchResults.filter(r => r.success).length;
+    const successfulSearchCount = searchResults.filter(r => r.success).length;
     console.log(`✅ All searches completed in ${searchExecutionTime}ms`);
-    console.log(`📊 Search results: ${successfulSearches}/${searchResults.length} successful`);
+    console.log(`📊 Search results: ${successfulSearchCount}/${searchResults.length} successful`);
 
-    // Step 3: Compile Report
-    console.log('📋 Step 3: Starting report compilation...');
-    const reportStartTime = Date.now();
-    
-    const successfulResults = searchResults.filter((r: SearchResult) => r.success);
-    const searchResultsText = successfulResults
-      .map((r: SearchResult) => `QUERY: ${r.query}\nINTENT: ${r.intent}\nRESULT:\n${r.response}\n---`)
-      .join('\n\n');
-
-    console.log(`📝 Compiling report from ${successfulResults.length} successful searches...`);
-    console.log(`📏 Total search results text length: ${searchResultsText.length} characters`);
-
-    const reportCompilationPrompt = `Synthesize this intelligence into an up-to-date briefing that highlights what's new and what's changed.
-
-INTELLIGENCE RESULTS:
-${searchResultsText}
-
-RECENCY-FOCUSED BRIEFING FRAMEWORK:
-
-1. INTELLIGENCE BRIEFING STYLE:
-   - Lead with the most recent and significant developments
-   - Emphasize changes, updates, and new information
-   - Structure as an intelligence update rather than general overview
-   - Focus on actionable intelligence for staying current
-
-2. BRIEFING STRUCTURE:
-   
-   A. Update Intelligence Style (default for recency focus):
-      - Key Recent Developments
-      - What's Changed Since Last Update
-      - Emerging Trends and Signals
-      - Action Items for Staying Current
-   
-   B. Competitive Intelligence Style (for comparative topics):
-      - Latest Competitive Movements
-      - Recent Feature Updates and Releases
-      - Current Market Positioning
-      - Intelligence Recommendations
-   
-   C. Trend Monitoring Style (for industry tracking):
-      - Emerging Developments
-      - Shift Indicators
-      - Market Signals
-      - Monitoring Recommendations
-
-3. RECENCY-FOCUSED QUALITY CRITERIA:
-   - Prioritize fresh information over background context
-   - Highlight temporal aspects (when things happened)
-   - Emphasize what's different from previous state
-   - Include clear recency indicators and timestamps
-   - Focus on forward-looking intelligence
-
-4. INTELLIGENCE TONE:
-   - Professional briefing style
-   - Emphasize "latest", "recent", "current", "emerging"
-   - Use intelligence language: "developments", "signals", "indicators"
-   - Maintain focus on staying up-to-date
-
-Report Style Preference: ${reportStyle}
-
-Provide a structured intelligence briefing that keeps the user current on their areas of interest.`;
-
-    const reportResponse = await client.chat.completions.create({
-      model: 'gpt-4.1-mini',
-      messages: [
-        {
-          role: 'user',
-          content: reportCompilationPrompt,
-        },
-      ],
-      temperature: 0.2,
-    });
-
-    const reportCompilationTime = Date.now() - reportStartTime;
     const totalPipelineTime = Date.now() - pipelineStartTime;
-
-    const fullReport = reportResponse.choices[0]?.message?.content || '';
-    console.log(`✅ Report compilation completed in ${reportCompilationTime}ms`);
-    console.log(`📄 Generated report length: ${fullReport.length} characters`);
-    
-    // Parse report sections (basic parsing for now)
-    const reportSections = fullReport.split('\n\n');
-    const executiveSummary = reportSections.find(s => s.toLowerCase().includes('executive summary')) || reportSections[0] || '';
-    const detailedFindings = reportSections.find(s => s.toLowerCase().includes('detailed findings')) || reportSections[1] || '';
-    const actionableInsights = reportSections.find(s => s.toLowerCase().includes('actionable insights')) || reportSections[2] || '';
-    const sourceBibliography = reportSections.find(s => s.toLowerCase().includes('source bibliography') || s.toLowerCase().includes('sources')) || reportSections[3] || '';
-
-    const reportData: ReportData = {
-      executiveSummary,
-      detailedFindings,
-      actionableInsights,
-      sourceBibliography,
-      fullReport,
-    };
 
     // Calculate usage stats
     const totalTokens = searchResults.reduce((acc: number, r: SearchResult) => acc + (r.usage?.total_tokens || 0), 0);
     const avgSearchTime = searchResults.length > 0 ? searchResults.reduce((acc: number, r: SearchResult) => acc + r.durationMs, 0) / searchResults.length : 0;
+    const successfulSearches = searchResults.filter(r => r.success).length;
 
-    console.log('📊 Pipeline completed successfully! Performance summary:');
+    console.log('📊 Intelligence gathering completed successfully! Performance summary:');
     console.log(`  ⏱️  Total time: ${totalPipelineTime}ms`);
     console.log(`  🔍 Query extraction: ${queryExtractionTime}ms`);
     console.log(`  🌐 Search execution: ${searchExecutionTime}ms`);
-    console.log(`  📋 Report compilation: ${reportCompilationTime}ms`);
     console.log(`  🎯 Average search time: ${Math.round(avgSearchTime)}ms`);
     console.log(`  🔢 Total tokens used: ${totalTokens}`);
-    console.log(`  ✅ Success rate: ${successfulResults.length}/${searchResults.length} searches`);
+    console.log(`  ✅ Success rate: ${successfulSearches}/${searchResults.length} searches`);
 
     return NextResponse.json({
       success: true,
       transcript,
       extractedQueries,
       searchResults,
-      reportData,
       performance: {
         queryExtractionTime,
         searchExecutionTime,
-        reportCompilationTime,
         totalPipelineTime,
         avgSearchTime,
-        successfulSearches: successfulResults.length,
+        successfulSearches,
         totalSearches: searchResults.length,
       },
       usage: {
         totalTokens,
         queryExtractionTokens: extractionCompletion.usage?.total_tokens || 0,
-        reportCompilationTokens: reportResponse.usage?.total_tokens || 0,
         searchTokens: totalTokens,
       },
       settings: {
