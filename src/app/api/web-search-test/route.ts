@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       query,
-      response: response.choices[0]?.message?.content,
+      response: (response.choices[0]?.message?.content ?? '').replace(/\\n/g, '\n'),
       usage: response.usage,
       model,
       durationMs,
