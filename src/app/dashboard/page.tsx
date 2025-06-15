@@ -577,7 +577,10 @@ export default function DashboardPage() {
       // Also try to save to Supabase for persistence (non-blocking)
       fetch('/api/content', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Include cookies for authentication
         body: JSON.stringify({
           type: 'all',
           data: generatedContent
