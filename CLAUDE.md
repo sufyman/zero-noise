@@ -16,6 +16,7 @@ npm run lint        # Run ESLint (always run after code changes)
 ```bash
 node test-google-sheets.js    # Test Google Sheets integration
 node import-to-sheets.js      # Import existing signups to sheets
+node probe-r2.js            # Test R2 storage integration
 ```
 
 ### Research Pipeline Testing
@@ -71,9 +72,12 @@ The app uses a passwordless authentication system:
 
 ### External Integrations
 - **OpenAI Web Search**: Primary intelligence gathering using `gpt-4o-mini-search-preview` model
-- **Podcastfy.ai**: Audio podcast generation via Hugging Face Spaces integration
+- **Podcastfy.ai**: Audio podcast generation via Hugging Face Spaces integration (`thatupiso/Podcastfy.ai_demo`)
 - **Content Generation**: Uses GPT-4.1-mini for format-specific content creation
 - **Google Sheets Integration**: Uses Google Apps Script webhook due to Node.js v22 compatibility issues
+- **ElevenLabs**: High-quality TTS integration for premium voice synthesis
+- **AWS R2**: File storage for audio files and uploads
+- **OpenAI Realtime API**: Voice conversation processing (experimental)
 
 ### PWA Configuration
 - **Manifest**: `/public/manifest.json` for mobile app installation
@@ -90,6 +94,18 @@ src/app/api/
 ├── logout/route.ts                  # User logout endpoint
 ├── signup/route.ts                  # User registration endpoint
 ├── preferences/route.ts             # User preferences storage
+├── chat/route.ts                    # Chat functionality
+├── files/route.ts                   # File management
+├── generate-content/route.ts        # Content generation
+├── generate-podcast/route.ts        # Podcast generation
+├── lipsync/route.ts                 # Lip sync processing
+├── podcast/route.ts                 # Podcast handling
+├── realtime-onboarding/route.ts     # Real-time voice onboarding
+├── speech-to-text/route.ts          # STT processing
+├── tts/route.ts                     # Text-to-speech
+├── upload/route.ts                  # File uploads
+├── voice-onboarding/route.ts        # Voice onboarding flow
+├── download/[key]/route.ts          # File downloads
 └── research-pipeline/
     ├── route.ts                     # Main intelligence gathering pipeline
     ├── brief/route.ts               # Generate concise intelligence briefs (300 words)
@@ -130,6 +146,13 @@ OPENAI_API_KEY=              # Required for research pipeline and content genera
 HUGGINGFACE_SPACE=           # Podcastfy.ai Hugging Face space for podcast generation
 GEMINI_API_KEY=              # For podcast content processing
 
+# Storage
+R2_ACCOUNT_ID=               # Cloudflare R2 account ID
+R2_ACCESS_KEY_ID=            # R2 access key
+R2_SECRET_ACCESS_KEY=        # R2 secret key
+R2_BUCKET_NAME=              # R2 bucket name
+R2_DOMAIN=                   # R2 custom domain
+
 # Optional TTS Configuration
 ELEVENLABS_API_KEY=          # For high-quality voice synthesis (optional)
 ```
@@ -144,7 +167,7 @@ ELEVENLABS_API_KEY=          # For high-quality voice synthesis (optional)
 
 ## Key Implementation Details
 
-### Research Pipeline Logic (`lib/podcastfy.ts` & `src/app/api/research-pipeline/`)
+### Research Pipeline Logic (`src/lib/podcastfy.ts` & `src/app/api/research-pipeline/`)
 - **Intelligence Gathering**: Parallel web search execution with performance tracking
 - **Query Optimization**: AI-powered extraction focuses on actionable business intelligence
 - **Content Generation**: Format-specific templates ensure professional output quality

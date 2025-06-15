@@ -1,6 +1,6 @@
 // src/app/api/research-pipeline/podcast/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { generatePodcast, PodcastfyParams } from '../../../../../lib/podcastfy';
+import { generatePodcast, PodcastfyParams } from '../../../../lib/podcastfy';
 
 interface SearchResult {
   query: string;

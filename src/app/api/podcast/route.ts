@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { generatePodcast } from '../../../../lib/podcastfy';
+import { generatePodcast } from '../../../lib/podcastfy';
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 5 minutes timeout

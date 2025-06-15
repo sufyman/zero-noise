@@ -11,9 +11,12 @@ interface LipsyncRequest {
   syncMode?: 'cut_off' | 'extend_end';
 }
 
+
+const DEFAULT_VIDEO="https://pub-e225e48608e94a5f8221ff06fdf66753.r2.dev/Women_presenting_news_202506151123_iyr50.mp4"
+
 export async function POST(request: NextRequest) {
   try {
-    const { videoUrl, audioUrl, outputFileName = 'lipsync-output', syncMode = 'cut_off' }: LipsyncRequest = await request.json();
+    const { videoUrl = DEFAULT_VIDEO, audioUrl, outputFileName = 'lipsync-output' }: LipsyncRequest = await request.json();
 
     // Validate inputs
     if (!videoUrl || !audioUrl) {
@@ -44,7 +47,7 @@ export async function POST(request: NextRequest) {
         input: [
           {
             type: "video",
-            url: videoUrl,
+            url: videoUrl || DEFAULT_VIDEO,
           },
           {
             type: "audio",
@@ -53,7 +56,7 @@ export async function POST(request: NextRequest) {
         ],
         model: "lipsync-1.9.0-beta",
         options: {
-          sync_mode: "cut_off"
+          sync_mode: "loop"
         //   "loop"
         //   "cut_off",
         }
