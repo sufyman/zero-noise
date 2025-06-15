@@ -207,38 +207,129 @@ export async function POST(request: NextRequest) {
 }
 
 function parseAdvancedGeneratedContent(content: string, preferences: OnboardingData, interests: string[]) {
-  // Enhanced parsing with better content extraction
-  const podcastMatch = content.match(/1\.\s*PODCAST SCRIPT[\s\S]*?(?=2\.|$)/i) || 
-                       content.match(/PODCAST[\s\S]*?(?=2\.|RESEARCH|REPORT|VIDEO|$)/i);
-  
-     const reportMatch = content.match(/2\.\s*COMPREHENSIVE RESEARCH REPORT[\s\S]*?(?=3\.|$)/i) ||
-                      content.match(/RESEARCH REPORT[\s\S]*?(?=3\.|VIDEO|$)/i) ||
-                      content.match(/REPORT[\s\S]*?(?=3\.|VIDEO|$)/i);
-  
-  const videoMatch = content.match(/3\.\s*ADVANCED VIDEO SCRIPT[\s\S]*$/i) ||
-                    content.match(/VIDEO SCRIPT[\s\S]*$/i) ||
-                    content.match(/VIDEO[\s\S]*$/i);
+  console.log('🔍 Parsing AI-generated content...');
+  console.log('📝 Content preview:', content.substring(0, 500) + '...');
 
-  const podcastContent = podcastMatch?.[0] || '';
-  const reportContent = reportMatch?.[0] || '';
-  const videoContent = videoMatch?.[0] || '';
+  // More flexible parsing patterns to handle various AI formatting
+  const podcastPatterns = [
+    /1\.\s*PODCAST\s*SCRIPT[\s\S]*?(?=2\.|$)/i,
+    /PODCAST[\s\S]*?(?=(?:2\.|#|##|\*\*|RESEARCH|REPORT|VIDEO|$))/i,
+    /(?:podcast|episode)[\s\S]*?(?=(?:#|##|\*\*|report|video|research|$))/i
+  ];
+  
+  const reportPatterns = [
+    /2\.\s*(?:COMPREHENSIVE\s*)?RESEARCH\s*REPORT[\s\S]*?(?=3\.|$)/i,
+    /(?:RESEARCH\s*)?REPORT[\s\S]*?(?=(?:3\.|#|##|\*\*|VIDEO|$))/i,
+    /(?:report|analysis)[\s\S]*?(?=(?:#|##|\*\*|video|$))/i
+  ];
+  
+  const videoPatterns = [
+    /3\.\s*(?:ADVANCED\s*)?VIDEO\s*SCRIPT[\s\S]*$/i,
+    /VIDEO[\s\S]*$/i,
+    /(?:video|script|tiktok)[\s\S]*$/i
+  ];
+
+  // Try each pattern until one works
+  let podcastContent = '';
+  for (const pattern of podcastPatterns) {
+    const match = content.match(pattern);
+    if (match && match[0].trim().length > 100) {
+      podcastContent = match[0];
+      console.log('✅ Found podcast content via pattern');
+      break;
+    }
+  }
+
+  let reportContent = '';
+  for (const pattern of reportPatterns) {
+    const match = content.match(pattern);
+    if (match && match[0].trim().length > 100) {
+      reportContent = match[0];
+      console.log('✅ Found report content via pattern');
+      break;
+    }
+  }
+
+  let videoContent = '';
+  for (const pattern of videoPatterns) {
+    const match = content.match(pattern);
+    if (match && match[0].trim().length > 50) {
+      videoContent = match[0];
+      console.log('✅ Found video content via pattern');
+      break;
+    }
+  }
+
+  // If patterns fail, try simple splitting
+  if (!podcastContent || !reportContent || !videoContent) {
+    console.log('⚠️ Pattern matching failed, trying section splitting...');
+    const sections = content.split(/(?=#|##|\*\*|^\d+\.)/m).filter(s => s.trim());
+    
+    for (const section of sections) {
+      const lowerSection = section.toLowerCase();
+      if (lowerSection.includes('podcast') && !podcastContent && section.length > 100) {
+        podcastContent = section;
+        console.log('✅ Found podcast content via splitting');
+      } else if ((lowerSection.includes('report') || lowerSection.includes('analysis')) && !reportContent && section.length > 100) {
+        reportContent = section;
+        console.log('✅ Found report content via splitting');
+      } else if ((lowerSection.includes('video') || lowerSection.includes('script')) && !videoContent && section.length > 50) {
+        videoContent = section;
+        console.log('✅ Found video content via splitting');
+      }
+    }
+  }
+
+  // Final fallback: if still no content, use the whole content divided by 3
+  if (!podcastContent && !reportContent && !videoContent && content.length > 300) {
+    console.log('⚠️ Using content division fallback');
+    const contentLength = content.length;
+    const third = Math.floor(contentLength / 3);
+    podcastContent = content.substring(0, third);
+    reportContent = content.substring(third, third * 2);
+    videoContent = content.substring(third * 2);
+  }
+
+  console.log('📊 Content extraction results:');
+  console.log(`- Podcast: ${podcastContent.length} characters`);
+  console.log(`- Report: ${reportContent.length} characters`);
+  console.log(`- Video: ${videoContent.length} characters`);
+
+  const cleanedPodcast = cleanContent(podcastContent);
+  const cleanedReport = cleanContent(reportContent);
+  const cleanedVideo = cleanContent(videoContent);
+
+  console.log('🧹 Content cleaning results:');
+  console.log(`- Cleaned podcast: ${cleanedPodcast.length} chars (original: ${podcastContent.length})`);
+  console.log(`- Cleaned report: ${cleanedReport.length} chars (original: ${reportContent.length})`);
+  console.log(`- Cleaned video: ${cleanedVideo.length} chars (original: ${videoContent.length})`);
+
+  // Only use fallback if cleaned content is too short (likely parsing failed)
+  const finalPodcastScript = cleanedPodcast.length > 200 ? cleanedPodcast : generateFallbackPodcast(preferences, interests);
+  const finalReportContent = cleanedReport.length > 300 ? cleanedReport : generateFallbackReport(preferences, interests);
+  const finalVideoTranscript = cleanedVideo.length > 100 ? cleanedVideo : generateFallbackVideo(preferences, interests);
+
+  console.log('🎯 Final content selection:');
+  console.log(`- Using ${finalPodcastScript === cleanedPodcast ? 'AI-generated' : 'fallback'} podcast`);
+  console.log(`- Using ${finalReportContent === cleanedReport ? 'AI-generated' : 'fallback'} report`);
+  console.log(`- Using ${finalVideoTranscript === cleanedVideo ? 'AI-generated' : 'fallback'} video`);
 
   return {
     podcast: {
       title: extractEnhancedTitle(podcastContent) || `Deep Dive: ${interests.slice(0, 2).join(' & ')} - Strategic Insights`,
       description: extractEnhancedDescription(podcastContent) || 
         `An in-depth ${preferences.dailyTime}-minute analysis of cutting-edge developments in ${interests.slice(0, 2).join(' and ')}, featuring expert insights, contrarian perspectives, and actionable strategies tailored for ${preferences.communicationStyle.toLowerCase()} professionals.`,
-      script: cleanContent(podcastContent) || generateFallbackPodcast(preferences, interests),
+      script: finalPodcastScript,
       audioUrl: null
     },
     richTextReport: {
       title: extractEnhancedTitle(reportContent) || `Strategic Intelligence Report: ${interests[0]} Market Analysis & Future Outlook`,
-      content: cleanContent(reportContent) || generateFallbackReport(preferences, interests),
+      content: finalReportContent,
       url: `/reports/enhanced-${Date.now()}`
     },
     tikTokScript: {
       title: extractEnhancedTitle(videoContent) || `The ${interests[0]} Insight Everyone's Missing`,
-      transcript: cleanContent(videoContent) || generateFallbackVideo(preferences, interests),
+      transcript: finalVideoTranscript,
       scenes: parseEnhancedScenes(videoContent, interests)
     }
   };
@@ -283,10 +374,23 @@ function extractEnhancedDescription(content: string): string {
 }
 
 function cleanContent(content: string): string {
+  if (!content || content.trim().length === 0) {
+    return '';
+  }
+
   return content
-    .replace(/^\d+\.\s*(PODCAST SCRIPT|COMPREHENSIVE RESEARCH REPORT|ADVANCED VIDEO SCRIPT)[\s:]*\n*/i, '')
+    // Remove section headers
+    .replace(/^\d+\.\s*(PODCAST\s*SCRIPT|COMPREHENSIVE\s*RESEARCH\s*REPORT|ADVANCED\s*VIDEO\s*SCRIPT|RESEARCH\s*REPORT|VIDEO\s*SCRIPT)[\s:]*\n*/i, '')
+    .replace(/^(PODCAST|REPORT|VIDEO)[\s:]*\n*/i, '')
+    // Remove markdown headers for sections  
+    .replace(/^#+\s*(PODCAST|REPORT|VIDEO|RESEARCH).*?\n/gim, '')
+    // Remove title/description markers
     .replace(/\*\*Title:\*\*.*?\n/g, '')
     .replace(/\*\*Description:\*\*.*?\n/g, '')
+    .replace(/Title:\s*.*?\n/g, '')
+    .replace(/Description:\s*.*?\n/g, '')
+    // Remove duplicate spacing
+    .replace(/\n\s*\n\s*\n/g, '\n\n')
     .trim();
 }
 
