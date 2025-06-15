@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { validateSession, getSession } from '@/lib/auth';
-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
-
-const elevenlabs = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY || '',
-});
 
 export async function POST(request: NextRequest) {
   try {
@@ -40,19 +35,48 @@ export async function POST(request: NextRequest) {
 
     console.log('Generating speech for text:', text.substring(0, 100) + '...');
     console.log('Using voice ID:', voiceId);
+    console.log('API Key available:', !!process.env.ELEVENLABS_API_KEY);
 
-    // Generate speech using ElevenLabs  
-    const audioStream = await elevenlabs.textToSpeech.convert(voiceId, {
-      text: text,
-      modelId: "eleven_multilingual_v2"
+    // Use direct HTTP call instead of SDK to avoid client issues
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'audio/mpeg',
+        'Content-Type': 'application/json',
+        'xi-api-key': process.env.ELEVENLABS_API_KEY!,
+      },
+      body: JSON.stringify({
+        text: text,
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.5
+        }
+      }),
     });
 
-    // Convert stream to buffer
-    const chunks: Buffer[] = [];
-    for await (const chunk of audioStream) {
-      chunks.push(Buffer.from(chunk));
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('ElevenLabs API error:', response.status, errorText);
+      
+      // Check for quota exceeded error
+      try {
+        const errorData = JSON.parse(errorText);
+        if (errorData.detail?.status === 'quota_exceeded') {
+          return NextResponse.json({ 
+            error: 'TTS quota exceeded', 
+            message: 'Voice generation temporarily unavailable. Text content is still available.',
+            quotaExceeded: true 
+          }, { status: 402 });
+        }
+      } catch {
+        // If parsing fails, continue with original error
+      }
+      
+      throw new Error(`ElevenLabs API returned ${response.status}: ${errorText}`);
     }
-    const audioBuffer = Buffer.concat(chunks);
+
+    const audioBuffer = Buffer.from(await response.arrayBuffer());
 
     console.log('Audio generation successful, buffer size:', audioBuffer.length);
 

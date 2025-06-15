@@ -876,7 +876,21 @@ export default function DashboardPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to generate audio');
+        const errorData = await response.json().catch(() => ({}));
+        
+        if (response.status === 402 && errorData.quotaExceeded) {
+          console.warn('⚠️ TTS quota exceeded, continuing without audio');
+          // Create a short silent audio data URL (1 second of silence)
+          const silentAudioData = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+          const silentAudio = new Audio(silentAudioData);
+          return new Promise((resolve) => {
+            silentAudio.onloadeddata = () => resolve(silentAudio);
+            // Immediately resolve if loading fails  
+            setTimeout(() => resolve(silentAudio), 100);
+          });
+        }
+        
+        throw new Error(`Failed to generate audio: ${response.status}`);
       }
 
       const audioBlob = await response.blob();
