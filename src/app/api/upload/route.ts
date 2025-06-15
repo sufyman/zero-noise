@@ -11,7 +11,7 @@ export async function POST(request: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const key = `uploads/${Date.now()}-${file.name}`;
+    const key = `${Date.now()}-${file.name}`;
     
     await uploadFile(key, buffer, file.type);
 

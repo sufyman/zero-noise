@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   ListObjectsV2Command,
+  ListBucketsCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -21,7 +22,8 @@ export const r2 = new S3Client({
     accessKeyId: R2_ACCESS_KEY_ID!,
     secretAccessKey: R2_SECRET_ACCESS_KEY!,
   },
-  requestChecksumCalculation: "WHEN_REQUIRED",
+  forcePathStyle: true,          // 👈 keeps bucket out of the host header
+  requestChecksumCalculation: "WHEN_REQUIRED",   // R2 compatibility shim
   responseChecksumValidation: "WHEN_REQUIRED",
 });
 
@@ -68,4 +70,9 @@ export async function getPresignedUrl(key: string, expiresIn = 3600) {
     new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }),
     { expiresIn }
   );
+}
+
+export async function listBuckets() {
+  const command = new ListBucketsCommand({});
+  return await r2.send(command);
 } 
