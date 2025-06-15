@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { uploadFile, getPresignedUrl } from '@/lib/r2';
 
 const elevenlabs = new ElevenLabsClient({
   apiKey: process.env.ELEVENLABS_API_KEY || '',
@@ -44,12 +45,37 @@ export async function POST(request: NextRequest) {
 
     console.log('Audio generation successful, buffer size:', audioBuffer.length);
 
-    // Return audio as response
+    // Upload to R2 storage
+    let r2Key = '';
+    let r2Url = '';
+    let r2UploadStatus = 'failed';
+    
+    try {
+      r2Key = `audio-${Date.now()}.mp3`;
+      console.log('🗄️ Uploading audio to R2 with key:', r2Key);
+      
+      await uploadFile(r2Key, audioBuffer, 'audio/mpeg');
+      
+      // Generate signed URL (expires in 24 hours)
+      r2Url = await getPresignedUrl(r2Key, 86400);
+      r2UploadStatus = 'success';
+      
+      console.log('✅ R2 upload successful, signed URL generated:', r2Url.split('?')[0] + '?[SIGNED]');
+    } catch (r2Error) {
+      console.error('❌ R2 upload failed:', r2Error);
+      // Don't fail the request - continue with audio response
+    }
+
+    // Return audio as response (maintain existing functionality)
     return new NextResponse(audioBuffer, {
       headers: {
         'Content-Type': 'audio/mpeg',
         'Content-Length': audioBuffer.length.toString(),
         'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+        // Add R2 information as headers
+        'X-R2-Key': r2Key,
+        'X-R2-Url': r2Url,
+        'X-R2-Upload-Status': r2UploadStatus,
       },
     });
 
