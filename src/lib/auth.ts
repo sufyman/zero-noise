@@ -103,8 +103,78 @@ export const generateSessionId = (): string => {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 };
 
-// Create login sessions (in-memory for simplicity with max 100 users)
+// Session persistence using file storage (for server restarts)
+const SESSIONS_FILE = 'signup-data/sessions.jsonl';
+
+// Helper to load sessions from file
+const loadSessions = async (): Promise<Map<string, LoginSession>> => {
+  const sessions = new Map<string, LoginSession>();
+  
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const filePath = path.join(process.cwd(), SESSIONS_FILE);
+    
+    if (!fs.existsSync(filePath)) {
+      return sessions;
+    }
+
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.trim().split('\n').filter((line: string) => line);
+    
+    for (const line of lines) {
+      try {
+        const session: LoginSession = JSON.parse(line);
+        // Only load sessions that are less than 24 hours old
+        const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
+        if (new Date(session.loginTime).getTime() > oneDayAgo) {
+          sessions.set(session.sessionId, session);
+        }
+      } catch {
+        // Skip invalid lines
+      }
+    }
+  } catch (error) {
+    console.error('Error loading sessions:', error);
+  }
+  
+  return sessions;
+};
+
+// Helper to save sessions to file
+const saveSessions = async (sessions: Map<string, LoginSession>): Promise<void> => {
+  try {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    // Ensure directory exists
+    const dir = path.join(process.cwd(), 'signup-data');
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    
+    const filePath = path.join(process.cwd(), SESSIONS_FILE);
+    
+    // Convert sessions to JSONL format
+    const lines = Array.from(sessions.values()).map(session => JSON.stringify(session));
+    fs.writeFileSync(filePath, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+  } catch (error) {
+    console.error('Error saving sessions:', error);
+  }
+};
+
+// Initialize sessions (will be loaded asynchronously)
 const activeSessions = new Map<string, LoginSession>();
+
+// Load sessions on startup
+loadSessions().then(sessions => {
+  sessions.forEach((session, sessionId) => {
+    activeSessions.set(sessionId, session);
+  });
+}).catch(error => {
+  console.error('Error initializing sessions:', error);
+});
 
 // Create login session
 export const createLoginSession = (email: string): string => {
@@ -132,6 +202,11 @@ export const createLoginSession = (email: string): string => {
     }
   }
   
+  // Save sessions to file
+  saveSessions(activeSessions).catch(error => {
+    console.error('Error saving sessions:', error);
+  });
+  
   return sessionId;
 };
 
@@ -152,7 +227,13 @@ export const validateSession = (sessionId: string): boolean => {
 
 // Logout (remove session)
 export const logout = (sessionId: string): boolean => {
-  return activeSessions.delete(sessionId);
+  const deleted = activeSessions.delete(sessionId);
+  if (deleted) {
+    saveSessions(activeSessions).catch(error => {
+      console.error('Error saving sessions:', error);
+    });
+  }
+  return deleted;
 };
 
 // Get all active sessions (for debugging)
