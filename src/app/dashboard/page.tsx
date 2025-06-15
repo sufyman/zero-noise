@@ -288,6 +288,14 @@ export default function DashboardPage() {
           
           setOnboardingData(data);
 
+          // Check if content generation is needed
+          if (!storedGeneratedContent && contentGenerationStatus !== 'complete') {
+            console.log('🚀 No generated content found, triggering content generation...');
+            contentGenerationStatus = 'in-progress';
+            localStorage.setItem('contentGenerationStatus', 'in-progress');
+            triggerContentGeneration(data);
+          }
+
           // Initialize content cards based on selected formats
           const cards: ContentCard[] = [];
 
@@ -396,6 +404,15 @@ export default function DashboardPage() {
               }
               
               contentGenerationStatus = 'complete';
+            } else {
+              // No content found in Supabase, trigger content generation
+              console.log('🚀 No content found, triggering content generation...');
+              contentGenerationStatus = 'in-progress';
+              localStorage.setItem('contentGenerationStatus', 'in-progress');
+              localStorage.setItem('onboardingData', JSON.stringify(data));
+              
+              // Trigger content generation in background
+              triggerContentGeneration(data);
             }
 
             // Initialize content cards based on selected formats
@@ -494,6 +511,92 @@ export default function DashboardPage() {
 
     return () => clearInterval(pollInterval);
   }, []);
+
+  // Trigger content generation when missing
+  const triggerContentGeneration = async (data: OnboardingData) => {
+    try {
+      console.log('🚀 Starting content generation for dashboard...');
+      
+      // Generate comprehensive user profile summary first
+      const summaryResponse = await fetch('/api/generate-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ onboardingData: data })
+      });
+
+      if (!summaryResponse.ok) {
+        throw new Error('Failed to generate profile summary');
+      }
+
+      const summaryData = await summaryResponse.json();
+      const profileSummary = summaryData.summary;
+
+      console.log('✅ Profile summary generated, creating enhanced content...');
+
+      // Generate high-quality content using enhanced API
+      const contentResponse = await fetch('/api/generate-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: profileSummary,
+          interests: data.interests,
+          preferences: data
+        })
+      });
+
+      if (!contentResponse.ok) {
+        throw new Error('Failed to generate enhanced content');
+      }
+
+      const enhancedContent = await contentResponse.json();
+      
+      console.log('🎉 Enhanced content generated successfully!');
+      
+      const generatedContent = {
+        podcast: enhancedContent.podcast || {
+          title: `${data.interests.slice(0, 2).join(' & ')} Deep Dive`,
+          description: `An insightful analysis of ${data.interests.join(' and ')}`,
+          script: `Enhanced podcast content for ${data.interests.join(', ')}`
+        },
+        richTextReport: enhancedContent.richTextReport || {
+          title: `${data.interests[0]} Strategic Analysis`,
+          content: `# ${data.interests[0]} Intelligence Report\n\nComprehensive analysis and insights...`,
+          url: `/reports/enhanced-${Date.now()}`
+        },
+        tikTokScript: enhancedContent.tikTokScript || {
+          title: `${data.interests[0]} Breakthrough`,
+          transcript: `60-second insight into ${data.interests[0]}`,
+          scenes: []
+        }
+      };
+
+      // Save to localStorage
+      localStorage.setItem('generatedContent', JSON.stringify(generatedContent));
+      localStorage.setItem('contentGenerationStatus', 'complete');
+      
+      // Also try to save to Supabase for persistence (non-blocking)
+      fetch('/api/content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'all',
+          data: generatedContent
+        })
+      }).then(response => {
+        if (response.ok) {
+          console.log('✅ Content also saved to Supabase for persistence');
+        } else {
+          console.log('⚠️ Failed to save to Supabase, but content is available in localStorage');
+        }
+      }).catch(error => {
+        console.log('⚠️ Supabase save failed, but content is available in localStorage:', error);
+      });
+      
+    } catch (error) {
+      console.error('❌ Content generation failed:', error);
+      localStorage.setItem('contentGenerationStatus', 'error');
+    }
+  };
 
   // Handle user question interruption
   const handleUserQuestion = useCallback(async (question: string) => {
@@ -1702,6 +1805,27 @@ export default function DashboardPage() {
                     {generatedContent.tikTokScript.title}
                   </h1>
                   <p className="text-gray-300">60-second video script with lipsync preparation</p>
+                </div>
+
+                {/* Video Preview */}
+                <div className="mb-8">
+                  <h3 className="text-xl font-semibold text-white mb-4">Video Preview</h3>
+                  <div className="bg-black rounded-xl overflow-hidden aspect-[9/16] max-w-xs mx-auto">
+                    <video
+                      controls
+                      className="w-full h-full object-cover"
+                      poster="/api/placeholder-image"
+                    >
+                      <source 
+                        src="https://private-sync-user-generations-v2.s3.amazonaws.com/generations/86996d2d-4df4-44e2-884a-42f9b2912980/f5ab3754-b328-4131-bc1a-7b06d667ca77_stitcher/result.mp4" 
+                        type="video/mp4" 
+                      />
+                      Your browser does not support the video tag.
+                    </video>
+                  </div>
+                  <p className="text-center text-gray-400 text-sm mt-2">
+                    Demo video - Your personalized content will appear here
+                  </p>
                 </div>
 
                 {/* Scene Breakdown */}
