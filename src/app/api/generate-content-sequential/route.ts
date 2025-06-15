@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { validateSession, getSession } from '@/lib/auth';
 
 interface OnboardingData {
   interests: string[];
@@ -14,6 +15,17 @@ interface OnboardingData {
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate authentication
+    const sessionId = request.cookies.get('session')?.value;
+    if (!sessionId || !(await validateSession(sessionId))) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+
+    const session = getSession(sessionId);
+    if (!session) {
+      return NextResponse.json({ error: 'Session not found' }, { status: 401 });
+    }
+
     const { summary, interests, preferences, step }: { 
       summary: string; 
       interests: string[]; 
@@ -44,6 +56,33 @@ export async function POST(request: NextRequest) {
         break;
       default:
         return NextResponse.json({ error: 'Invalid step parameter' }, { status: 400 });
+    }
+
+    // Save generated content to Supabase
+    console.log(`💾 Saving ${step} content to Supabase...`);
+    try {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+      const saveResponse = await fetch(`${baseUrl}/api/content`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Cookie': `session=${sessionId}`
+        },
+        body: JSON.stringify({
+          type: step,
+          data: content
+        })
+      });
+
+      if (!saveResponse.ok) {
+        console.error('Failed to save content to Supabase:', await saveResponse.text());
+        // Continue without failing the whole request
+      } else {
+        console.log(`✅ ${step} content saved to Supabase successfully`);
+      }
+    } catch (saveError) {
+      console.error('Error saving content to Supabase:', saveError);
+      // Continue without failing the whole request
     }
 
     return NextResponse.json({

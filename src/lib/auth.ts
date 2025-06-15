@@ -215,9 +215,19 @@ export const getSession = (sessionId: string): LoginSession | null => {
   return activeSessions.get(sessionId) || null;
 };
 
-// Validate session
-export const validateSession = (sessionId: string): boolean => {
-  const session = activeSessions.get(sessionId);
+// Validate session - now async to properly load sessions
+export const validateSession = async (sessionId: string): Promise<boolean> => {
+  let session = activeSessions.get(sessionId);
+  
+  // If session not found in memory and we haven't loaded yet, load from file
+  if (!session && activeSessions.size === 0) {
+    const loadedSessions = await loadSessions();
+    loadedSessions.forEach((sessionData, id) => {
+      activeSessions.set(id, sessionData);
+    });
+    session = activeSessions.get(sessionId);
+  }
+  
   if (!session) return false;
   
   // Check if session is less than 24 hours old

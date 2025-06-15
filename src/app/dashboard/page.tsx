@@ -261,7 +261,7 @@ export default function DashboardPage() {
     const loadData = async () => {
       try {
 
-        // Load user preferences from database
+        // Load user preferences and content from Supabase
         const preferencesResponse = await fetch('/api/preferences');
         if (preferencesResponse.ok) {
           const preferencesData = await preferencesResponse.json();
@@ -283,9 +283,22 @@ export default function DashboardPage() {
             
             setOnboardingData(data);
 
-            // Check localStorage for content generation status (temporary during generation)
-            const contentGenerationStatus = localStorage.getItem('contentGenerationStatus');
-            const storedGeneratedContent = localStorage.getItem('generatedContent');
+            // Load generated content from Supabase first
+            let contentGenerationStatus = 'in-progress';
+            let storedGeneratedContent = null;
+            
+            if (preferencesData.content?.generatedContent) {
+              console.log('📦 Found generated content in Supabase');
+              contentGenerationStatus = 'complete';
+              storedGeneratedContent = JSON.stringify(preferencesData.content.generatedContent);
+              // Also store in localStorage for immediate access
+              localStorage.setItem('generatedContent', storedGeneratedContent);
+              localStorage.setItem('contentGenerationStatus', 'complete');
+            } else {
+              // Fallback to localStorage for content generation status (temporary during generation)
+              contentGenerationStatus = localStorage.getItem('contentGenerationStatus') || 'in-progress';
+              storedGeneratedContent = localStorage.getItem('generatedContent');
+            }
 
             // Initialize content cards based on selected formats
             const cards: ContentCard[] = [];
@@ -604,6 +617,7 @@ export default function DashboardPage() {
   const generateSegmentAudio = async (segment: PodcastSegment): Promise<HTMLAudioElement> => {
     try {
       const voiceId = voices[segment.speaker as keyof typeof voices];
+      const segmentId = `${segment.speaker}_${segment.timestamp}_${Date.now()}`;
       
       const response = await fetch('/api/tts', {
         method: 'POST',
@@ -613,7 +627,9 @@ export default function DashboardPage() {
         body: JSON.stringify({
           text: segment.text,
           voiceId: voiceId,
-          speed: podcastState.playbackSpeed
+          speed: podcastState.playbackSpeed,
+          segmentId: segmentId,
+          saveToProfile: true
         }),
       });
 

@@ -1,24 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { validateSession, getSession } from '@/lib/auth';
+import { createClient } from '@/lib/supabase/server';
+import { supabase } from '@/lib/supabase';
 import OpenAI from 'openai';
-import path from 'path';
-import fs from 'fs/promises';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || '',
 });
 
-const PREFERENCES_FILE = path.join(process.cwd(), 'signup-data', 'preferences.jsonl');
-
 interface UserPreferences {
   email: string;
   interests: string[];
   contentFormat: string;
-  dailyTime: number; // minutes
+  dailyTime: number;
   podcastStyle: string;
   preferredSpeed: number;
   mantra: string;
-  profileSummary?: string; // Add comprehensive text summary
+  profileSummary?: string;
   updatedAt: string;
 }
 
@@ -29,11 +26,57 @@ interface OnboardingFormData {
   podcastStyle: string;
   preferredSpeed: number;
   mantra: string;
-  // Additional fields from form onboarding
   learningGoals?: string[];
   informationPreferences?: string[];
   communicationStyle?: string;
   personalityTraits?: string[];
+}
+
+interface GeneratedPodcast {
+  title: string;
+  description: string;
+  script: string;
+  audioUrl?: string;
+  segments?: Array<{
+    speaker: string;
+    text: string;
+    timestamp: number;
+  }>;
+}
+
+interface GeneratedReport {
+  title: string;
+  content: string;
+  url?: string;
+}
+
+interface GeneratedVideo {
+  title: string;
+  transcript: string;
+  scenes: Array<{
+    text: string;
+    duration: number;
+    emotion: string;
+  }>;
+}
+
+interface UserContent {
+  preferences?: UserPreferences;
+  generatedContent?: {
+    podcast?: GeneratedPodcast;
+    richTextReport?: GeneratedReport;
+    tikTokScript?: GeneratedVideo;
+  };
+  audioFiles?: {
+    [key: string]: string; // segment/file id -> base64 or URL
+  };
+  contentHistory?: Array<{
+    type: string;
+    data: Record<string, unknown>;
+    createdAt: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
 }
 
 async function generateProfileSummary(formData: OnboardingFormData): Promise<string> {
@@ -85,66 +128,87 @@ Write in a natural, conversational tone as if you're briefing a podcast host abo
   }
 }
 
-async function ensurePreferencesFile() {
-  try {
-    await fs.access(PREFERENCES_FILE);
-  } catch {
-    await fs.writeFile(PREFERENCES_FILE, '', 'utf-8');
+// Generate numeric user ID from email
+function generateUserId(email: string): number {
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    const char = email.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
   }
+  return Math.abs(hash);
 }
 
-async function getUserPreferences(email: string): Promise<UserPreferences | null> {
-  await ensurePreferencesFile();
-  
+async function getUserContent(email: string): Promise<UserContent | null> {
   try {
-    const data = await fs.readFile(PREFERENCES_FILE, 'utf-8');
-    const lines = data.trim().split('\n').filter(line => line);
+    const userId = generateUserId(email);
     
-    for (const line of lines.reverse()) { // Get most recent
-      try {
-        const prefs = JSON.parse(line) as UserPreferences;
-        if (prefs.email === email) {
-          return prefs;
-        }
-      } catch {
-        continue;
+    const { data, error } = await supabase
+      .from('users')
+      .select('content')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        // User not found, return null
+        return null;
       }
+      throw error;
     }
-    return null;
-  } catch {
+
+    return data?.content as UserContent || null;
+  } catch (error) {
+    console.error('Error fetching user content:', error);
     return null;
   }
 }
 
-async function saveUserPreferences(preferences: UserPreferences) {
-  await ensurePreferencesFile();
-  
-  const prefLine = JSON.stringify({
-    ...preferences,
-    updatedAt: new Date().toISOString()
-  });
-  
-  await fs.appendFile(PREFERENCES_FILE, prefLine + '\n', 'utf-8');
+async function saveUserContent(email: string, content: UserContent) {
+  try {
+    const userId = generateUserId(email);
+    
+    const { error } = await supabase
+      .from('users')
+      .upsert({
+        id: userId,
+        content: {
+          ...content,
+          updatedAt: new Date().toISOString()
+        }
+      });
+
+    if (error) {
+      throw error;
+    }
+  } catch (error) {
+    console.error('Error saving user content:', error);
+    throw error;
+  }
 }
 
 // GET - Retrieve user preferences
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const sessionId = request.cookies.get('session')?.value;
-    if (!sessionId || !validateSession(sessionId)) {
+    // Use Supabase auth instead of legacy file-based auth
+    const supabaseClient = await createClient();
+    const { data: { user }, error } = await supabaseClient.auth.getUser();
+    
+    console.log('🍪 Supabase auth user:', user?.email);
+    
+    if (error || !user) {
+      console.log('❌ Supabase authentication failed:', error?.message);
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
+    
+    console.log('✅ Supabase auth valid for user:', user.email);
 
-    const session = getSession(sessionId);
-    if (!session) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 401 });
-    }
-
-    const preferences = await getUserPreferences(session.email);
+    const userContent = await getUserContent(user.email!);
     
     return NextResponse.json({ 
-      hasPreferences: !!preferences,
-      preferences 
+      hasPreferences: !!(userContent?.preferences),
+      preferences: userContent?.preferences,
+      content: userContent
     });
   } catch (error) {
     console.error('Error fetching preferences:', error);
@@ -155,15 +219,18 @@ export async function GET(request: NextRequest) {
 // POST - Save user preferences
 export async function POST(request: NextRequest) {
   try {
-    const sessionId = request.cookies.get('session')?.value;
-    if (!sessionId || !validateSession(sessionId)) {
+    // Use Supabase auth instead of legacy file-based auth
+    const supabaseClient = await createClient();
+    const { data: { user }, error } = await supabaseClient.auth.getUser();
+    
+    console.log('🍪 Supabase auth user:', user?.email);
+    
+    if (error || !user) {
+      console.log('❌ Supabase authentication failed:', error?.message);
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
-
-    const session = getSession(sessionId);
-    if (!session) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 401 });
-    }
+    
+    console.log('✅ Supabase auth valid for user:', user.email);
 
     const body = await request.json();
     const {
@@ -205,23 +272,36 @@ export async function POST(request: NextRequest) {
     console.log('✅ Profile summary generated:', profileSummary.substring(0, 100) + '...');
 
     const preferences: UserPreferences = {
-      email: session.email,
+      email: user.email!,
       interests: formData.interests,
       contentFormat: formData.contentFormat,
       dailyTime: formData.dailyTime,
       podcastStyle: formData.podcastStyle,
       preferredSpeed: formData.preferredSpeed,
       mantra: formData.mantra,
-      profileSummary: profileSummary, // Store the AI-generated summary
+      profileSummary: profileSummary,
       updatedAt: new Date().toISOString()
     };
 
-    await saveUserPreferences(preferences);
+    // Get existing content or create new
+    const existingContent = await getUserContent(user.email!) || {
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    // Update with new preferences
+    const updatedContent: UserContent = {
+      ...existingContent,
+      preferences,
+      updatedAt: new Date().toISOString()
+    };
+
+    await saveUserContent(user.email!, updatedContent);
 
     return NextResponse.json({ 
       success: true,
       message: 'Preferences saved successfully',
-      profileSummary: profileSummary // Return the summary for confirmation
+      profileSummary: profileSummary
     });
   } catch (error) {
     console.error('Error saving preferences:', error);

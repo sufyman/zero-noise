@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { validateSession, getSession } from '@/lib/auth';
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 
 const elevenlabs = new ElevenLabsClient({
@@ -7,6 +8,17 @@ const elevenlabs = new ElevenLabsClient({
 
 export async function POST(request: NextRequest) {
   try {
+    // Validate authentication (optional for TTS, but helpful for saving to user data)
+    const sessionId = request.cookies.get('session')?.value;
+    let userId: string | null = null;
+    
+    if (sessionId && (await validateSession(sessionId))) {
+      const session = getSession(sessionId);
+      if (session) {
+        userId = session.email;
+      }
+    }
+
     // Handle malformed JSON requests
     let requestData;
     try {
@@ -16,7 +28,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON in request body' }, { status: 400 });
     }
 
-    const { text, voiceId = 'pNInz6obpgDQGcFmaJgB' } = requestData;
+    const { text, voiceId = 'pNInz6obpgDQGcFmaJgB', segmentId, saveToProfile = false } = requestData;
 
     if (!text) {
       return NextResponse.json({ error: 'Text is required' }, { status: 400 });
@@ -43,6 +55,36 @@ export async function POST(request: NextRequest) {
     const audioBuffer = Buffer.concat(chunks);
 
     console.log('Audio generation successful, buffer size:', audioBuffer.length);
+
+    // Save audio to user profile if requested and user is authenticated
+    if (saveToProfile && userId && segmentId) {
+      try {
+        const audioBase64 = audioBuffer.toString('base64');
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`;
+        
+        const saveResponse = await fetch(`${baseUrl}/api/content`, {
+          method: 'PUT',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cookie': `session=${sessionId}`
+          },
+          body: JSON.stringify({
+            audioFiles: {
+              [segmentId]: `data:audio/mpeg;base64,${audioBase64}`
+            }
+          })
+        });
+
+        if (saveResponse.ok) {
+          console.log(`✅ Audio file saved to profile for segment: ${segmentId}`);
+        } else {
+          console.error('Failed to save audio to profile:', await saveResponse.text());
+        }
+      } catch (saveError) {
+        console.error('Error saving audio to profile:', saveError);
+        // Continue without failing the whole request
+      }
+    }
 
     // Return audio as response
     return new NextResponse(audioBuffer, {

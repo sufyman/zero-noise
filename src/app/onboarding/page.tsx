@@ -504,7 +504,13 @@ export default function OnboardingPage() {
       });
 
       if (!saveResponse.ok) {
-        throw new Error('Failed to save onboarding data');
+        const errorText = await saveResponse.text();
+        console.error('❌ Save response failed:', {
+          status: saveResponse.status,
+          statusText: saveResponse.statusText,
+          error: errorText
+        });
+        throw new Error(`Failed to save onboarding data: ${saveResponse.status} ${errorText}`);
       }
 
       console.log('✅ Onboarding data saved to database');
