@@ -4,11 +4,10 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { 
+import {
   User, 
   Mic, 
   Loader2, 
-  MicOff, 
   MessageSquare, 
   Edit3,
   Check,
@@ -17,9 +16,12 @@ import {
   FileText,
   Video,
   Play,
-  ExternalLink
+  ExternalLink,
+  VolumeX,
+  Volume2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useConversation } from "@elevenlabs/react";
 
 interface User {
   email: string;
@@ -112,20 +114,10 @@ const INFORMATION_PREFERENCES = [
 ];
 
 export default function OnboardingPage() {
-  // const [user] = useState<User | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const router = useRouter();
+  
+  // Existing state
   const [mode, setMode] = useState<OnboardingMode>('choice');
-  const [onboardingData, setOnboardingData] = useState<OnboardingData>({
-    interests: [],
-    contentFormats: ['podcast'],
-    dailyTime: 15,
-    podcastStyle: 'conversational',
-    preferredSpeed: 1.5,
-    personalityTraits: [],
-    communicationStyle: '',
-    learningGoals: [],
-    informationPreferences: []
-  });
   const [currentStep, setCurrentStep] = useState(0);
   const [generatedContent, setGeneratedContent] = useState<GeneratedContent | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -146,13 +138,19 @@ export default function OnboardingPage() {
     responses: []
   });
 
+  // ElevenLabs conversation state
+  const [user, setUser] = useState<User | null>(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [microphonePermission, setMicrophonePermission] = useState<'granted' | 'denied' | 'prompt'>('prompt');
+  const [volume, setVolume] = useState(0.8);
+  const [isMuted, setIsMuted] = useState(false);
+
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const responseInProgressRef = useRef(false);
-  const router = useRouter();
 
   const manualSteps = [
     { title: 'Interests', key: 'interests' as keyof OnboardingData },
@@ -340,16 +338,25 @@ export default function OnboardingPage() {
     };
   };
 
-  const startConversation = () => {
-    const initialMessage = "Hi! I&apos;m Sam, your personal AI assistant. I&apos;m excited to help you set up your personalized content experience. Let&apos;s start by getting to know your interests - what topics would you like to stay updated on?";
-    
-    wsRef.current?.send(JSON.stringify({
-      type: 'response.create',
-      response: {
-        modalities: ['text', 'audio'],
-        instructions: initialMessage
+  const startConversation = async () => {
+    // Request microphone access if not already granted
+    if (microphonePermission !== 'granted') {
+      const granted = await requestMicrophoneAccess();
+      if (!granted) {
+        alert('Microphone access is required for voice conversation. You can still use text chat.');
+        return;
       }
-    }));
+    }
+
+    try {
+      const conversationId = await conversation.startSession({
+        agentId: 'agent_01jxqb1x94e6wt4455d1wp2q5x'
+      });
+      console.log('Conversation started with ID:', conversationId);
+    } catch (error) {
+      console.error('Failed to start conversation:', error);
+      alert('Failed to start conversation. Please try again.');
+    }
   };
 
   const handleRealtimeMessage = async (message: { type: string; delta?: string; transcript?: string; [key: string]: unknown }) => {
@@ -673,6 +680,161 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
     }
   };
 
+  // ElevenLabs conversation state
+  const [onboardingData, setOnboardingData] = useState<OnboardingData>({
+    interests: [],
+    contentFormats: ['podcast'],
+    dailyTime: 15,
+    podcastStyle: 'conversational',
+    preferredSpeed: 1.5,
+    personalityTraits: [],
+    communicationStyle: '',
+    learningGoals: [],
+    informationPreferences: []
+  });
+
+  // Client tool functions
+  const completeInterestsAndGoalsPhase = async (parameters: { interests_and_goals: string }): Promise<string> => {
+    try {
+      console.log('Completing interests and goals phase:', parameters.interests_and_goals);
+      
+      const response = await fetch('/api/preferences', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          interests: [parameters.interests_and_goals],
+          contentFormat: 'podcast',
+          dailyTime: 480,
+          podcastStyle: 'conversational',
+          preferredSpeed: 1.0,
+          mantra: '',
+          user_email: user?.email || null
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Interests saved successfully:', result);
+        return 'Interests saved successfully';
+      } else {
+        console.error('Failed to save interests');
+        return 'Failed to save interests';
+      }
+    } catch (error) {
+      console.error('Error in completeInterestsAndGoalsPhase:', error);
+      return 'Error saving interests';
+    }
+  };
+
+  const completeFormatAndFrequencyPhase = async (parameters: { format: string; frequency: string }): Promise<string> => {
+    try {
+      console.log('Completing format and frequency phase:', parameters);
+      
+      const response = await fetch('/api/preferences', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contentFormat: parameters.format,
+          dailyTime: 480,
+          interests: [],
+          podcastStyle: 'conversational',
+          preferredSpeed: 1.0,
+          mantra: '',
+          user_email: user?.email || null
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('Preferences saved successfully:', result);
+        return 'Preferences saved successfully';
+      } else {
+        console.error('Failed to save preferences');
+        return 'Failed to save preferences';
+      }
+    } catch (error) {
+      console.error('Error in completeFormatAndFrequencyPhase:', error);
+      return 'Error saving preferences';
+    }
+  };
+
+  // Initialize the conversation with client tools
+  const conversation = useConversation({
+    onConnect: () => {
+      console.log('Connected to ElevenLabs Conversational AI');
+    },
+    onDisconnect: () => {
+      console.log('Disconnected from ElevenLabs Conversational AI');
+      router.push('/dashboard');
+    },
+    onMessage: (message) => {
+      console.log('Message received:', message);
+    },
+    onError: (error) => {
+      console.error('Conversation error:', error);
+    },
+    clientTools: {
+      complete_interests_and_goals_phase: completeInterestsAndGoalsPhase,
+      complete_format_and_frequency_phase: completeFormatAndFrequencyPhase,
+    }
+  });
+
+  // Check microphone permission on mount
+  useEffect(() => {
+    const checkMicrophonePermission = async () => {
+      try {
+        const permission = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        setMicrophonePermission(permission.state);
+        
+        permission.onchange = () => {
+          setMicrophonePermission(permission.state);
+        };
+      } catch {
+        console.log('Permission API not supported');
+      }
+    };
+
+    checkMicrophonePermission();
+  }, []);
+
+  const requestMicrophoneAccess = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      setMicrophonePermission('granted');
+      return true;
+    } catch {
+      console.error('Microphone access denied');
+      setMicrophonePermission('denied');
+      return false;
+    }
+  };
+
+  const endConversation = async () => {
+    try {
+      await conversation.endSession();
+      console.log('Conversation ended');
+    } catch (error) {
+      console.error('Failed to end conversation:', error);
+    }
+  };
+
+  const toggleMute = async () => {
+    const newVolume = isMuted ? volume : 0;
+    await conversation.setVolume({ volume: newVolume });
+    setIsMuted(!isMuted);
+  };
+
+  const handleVolumeChange = async (newVolume: number) => {
+    setVolume(newVolume);
+    if (!isMuted) {
+      await conversation.setVolume({ volume: newVolume });
+    }
+  };
+
   if (isCheckingAuth) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800 flex items-center justify-center">
@@ -802,77 +964,119 @@ Scene 6: Outro - "Follow for more ${data.interests[0]} insights!"`,
                   <div className="w-20 h-20 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4">
                     <User className="w-10 h-10 text-white" />
                   </div>
-                  <h2 className="text-3xl font-bold text-white mb-2">Sam</h2>
-                  <p className="text-gray-300">Your AI Onboarding Assistant</p>
+                  <h2 className="text-3xl font-bold text-white mb-2">
+                    {user ? "Let's set up your preferences" : "Let's get you started"}
+                  </h2>
+                  <p className="text-gray-300 mb-6">
+                    {user 
+                      ? "Chat with our AI assistant to personalize your experience"
+                      : "Chat with our AI assistant to create your account and set up your preferences"
+                    }
+                  </p>
+                  
+                  {/* Microphone Permission Notice */}
+                  {microphonePermission === 'prompt' && (
+                    <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-4 mb-6">
+                      <p className="text-blue-200 text-sm">
+                        <strong>Voice Chat Available:</strong> We'll ask for microphone access to enable voice conversation. 
+                        You can also use text chat if you prefer.
+                      </p>
+                    </div>
+                  )}
+                  
+                  {microphonePermission === 'denied' && (
+                    <div className="bg-yellow-500/20 border border-yellow-500/30 rounded-lg p-4 mb-6">
+                      <p className="text-yellow-200 text-sm">
+                        <strong>Microphone Access Denied:</strong> Voice chat is disabled. 
+                        You can still use text chat or enable microphone access in your browser settings.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
-                <div className="space-y-6">
-                  {/* Connection Status */}
-                  <div className="flex items-center justify-center space-x-2 text-sm">
-                    <div className={`w-2 h-2 rounded-full ${
-                      realtimeState.connectionStatus === 'connected' ? 'bg-green-500' :
-                      realtimeState.connectionStatus === 'connecting' ? 'bg-yellow-500' :
-                      'bg-red-500'
+                {/* Conversation Status */}
+                <div className="flex items-center justify-center mb-8">
+                  <div className={`flex items-center space-x-4 p-4 rounded-lg ${
+                    conversation.status === 'connected' 
+                      ? 'bg-green-500/20 border border-green-500/30' 
+                      : 'bg-gray-500/20 border border-gray-500/30'
+                  }`}>
+                    <div className={`w-3 h-3 rounded-full ${
+                      conversation.status === 'connected' ? 'bg-green-400' : 'bg-gray-400'
                     }`} />
-                    <span className="text-gray-300">
-                      {realtimeState.connectionStatus === 'connected' ? 'Connected' :
-                       realtimeState.connectionStatus === 'connecting' ? 'Connecting...' :
-                       'Connection Error'}
+                    <span className="text-sm font-medium text-white">
+                      {conversation.status === 'connected' ? 'Connected' : 'Disconnected'}
                     </span>
-                  </div>
-
-                  {/* Conversation Area */}
-                  <div className="bg-black/20 rounded-xl p-6 min-h-[200px]">
-                    {realtimeState.samResponse && (
-                      <div className="mb-4">
-                        <div className="flex items-start space-x-3">
-                          <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center flex-shrink-0">
-                            <MessageSquare className="w-4 h-4 text-white" />
-                          </div>
-                          <div className="bg-white/10 rounded-lg p-3 max-w-[80%]">
-                            <p className="text-white">{realtimeState.samResponse}</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {realtimeState.currentTranscript && (
-                      <div className="flex items-start space-x-3 justify-end">
-                        <div className="bg-blue-500/20 rounded-lg p-3 max-w-[80%]">
-                          <p className="text-white">{realtimeState.currentTranscript}</p>
-                        </div>
-                        <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center flex-shrink-0">
-                          <User className="w-4 h-4 text-white" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Recording Controls */}
-                  <div className="flex items-center justify-center space-x-4">
-                    <Button
-                      variant={realtimeState.isRecording ? "destructive" : "default"}
-                      size="lg"
-                      className="rounded-full w-16 h-16"
-                      disabled={realtimeState.connectionStatus !== 'connected'}
-                    >
-                      {realtimeState.isRecording ? (
-                        <MicOff className="w-6 h-6" />
-                      ) : (
-                        <Mic className="w-6 h-6" />
-                      )}
-                    </Button>
                     
-                    <div className="text-center">
-                      <p className="text-white text-sm">
-                        {realtimeState.isRecording ? 'Listening...' : 'Tap to speak'}
-                      </p>
-                      <Progress 
-                        value={(realtimeState.questionIndex / realtimeState.totalQuestions) * 100} 
-                        className="w-32 mt-2"
-                      />
-                    </div>
+                    {conversation.isSpeaking && (
+                      <div className="flex items-center space-x-2">
+                        <div className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                        <span className="text-sm text-blue-200">AI is speaking...</span>
+                      </div>
+                    )}
                   </div>
+                </div>
+
+                {/* Conversation Controls */}
+                <div className="flex flex-col items-center space-y-6">
+                  {conversation.status === 'disconnected' ? (
+                    <button
+                      onClick={startConversation}
+                      className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-8 py-4 rounded-xl font-semibold text-lg hover:from-purple-600 hover:to-pink-600 transition-all duration-200 flex items-center space-x-3"
+                    >
+                      <Mic className="w-6 h-6" />
+                      <span>Start Conversation</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center space-x-4">
+                      <button
+                        onClick={endConversation}
+                        className="bg-red-500 text-white px-6 py-3 rounded-lg font-semibold hover:bg-red-600 transition-colors"
+                      >
+                        End Conversation
+                      </button>
+                      
+                      <button
+                        onClick={toggleMute}
+                        className={`p-3 rounded-lg font-semibold transition-colors ${
+                          isMuted 
+                            ? 'bg-gray-500 text-white hover:bg-gray-600' 
+                            : 'bg-blue-500 text-white hover:bg-blue-600'
+                        }`}
+                      >
+                        {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Volume Control */}
+                  {conversation.status === 'connected' && (
+                    <div className="flex items-center space-x-4 w-full max-w-xs">
+                      <Volume2 className="w-4 h-4 text-gray-300" />
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        value={volume}
+                        onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                        className="flex-1"
+                      />
+                      <span className="text-sm text-gray-300 w-8">{Math.round(volume * 100)}%</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Instructions */}
+                <div className="mt-8 p-6 bg-black/20 rounded-lg">
+                  <h3 className="font-semibold text-white mb-3">How it works:</h3>
+                  <ul className="space-y-2 text-sm text-gray-300">
+                    <li>• Click "Start Conversation" to begin chatting with our AI assistant</li>
+                    <li>• The AI will guide you through setting up your account and preferences</li>
+                    <li>• You can speak naturally or type your responses</li>
+                    <li>• The AI will ask about your interests, content preferences, and personalization options</li>
+                    <li>• Your preferences will be saved automatically during the conversation</li>
+                  </ul>
                 </div>
               </div>
             </motion.div>
