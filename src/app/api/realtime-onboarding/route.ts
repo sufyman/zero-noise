@@ -249,7 +249,7 @@ async function createEphemeralToken() {
         'OpenAI-Beta': 'realtime=v1'
       },
       body: JSON.stringify({
-        model: 'gpt-4o-realtime-preview-2024-12-17',
+        model: 'gpt-4o-mini-realtime-preview-2024-12-17',
         modalities: ['text', 'audio'],
         voice: 'alloy',
         input_audio_format: 'pcm16',
@@ -353,7 +353,7 @@ async function getRealtimeConfig() {
   // Return configuration for direct WebSocket connection using ephemeral token
   return NextResponse.json({
     websocketUrl: 'wss://api.openai.com/v1/realtime',
-    model: 'gpt-4o-realtime-preview-2024-10-01',
+    model: 'gpt-4o-mini-realtime-preview-2024-12-17',
     sessionConfig: {
       modalities: ['text', 'audio'],
       input_audio_format: 'pcm16',
