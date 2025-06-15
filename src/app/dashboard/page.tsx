@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/contexts/auth-context";
 
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -143,8 +144,7 @@ interface PodcastState {
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const { user, loading, signOut } = useAuth();
   const [onboardingData, setOnboardingData] = useState<OnboardingData | null>(null);
   const [contentCards, setContentCards] = useState<ContentCard[]>([]);
   const [selectedContent, setSelectedContent] = useState<ContentCard | null>(null);
@@ -175,18 +175,16 @@ export default function DashboardPage() {
 
   // Check authentication and load onboarding data
   useEffect(() => {
-    const checkAuthAndLoadData = async () => {
+    if (loading) return; // Wait for auth to load
+    
+    if (!user) {
+      // Not authenticated, redirect to home
+      window.location.href = '/';
+      return;
+    }
+
+    const loadData = async () => {
       try {
-        // Check authentication
-        const authResponse = await fetch('/api/auth');
-        if (authResponse.ok) {
-          const authData = await authResponse.json();
-          setUser(authData);
-        } else {
-          // Not authenticated, redirect to login
-          window.location.href = '/';
-          return;
-        }
 
         // Load user preferences from database
         const preferencesResponse = await fetch('/api/preferences');
@@ -285,12 +283,10 @@ export default function DashboardPage() {
         // On error, redirect to onboarding
         window.location.href = '/onboarding';
         return;
-      } finally {
-        setIsCheckingAuth(false);
       }
     };
 
-    checkAuthAndLoadData();
+    loadData();
 
     // Poll for content generation completion
     const pollInterval = setInterval(() => {
@@ -624,7 +620,7 @@ export default function DashboardPage() {
 
   const handleLogout = async () => {
     try {
-      await fetch('/api/logout', { method: 'POST' });
+      await signOut();
       localStorage.clear();
       window.location.href = '/';
     } catch (error) {
@@ -654,7 +650,7 @@ export default function DashboardPage() {
     }
   };
 
-  if (isCheckingAuth) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-violet-800 flex items-center justify-center">
         <div className="text-center">
